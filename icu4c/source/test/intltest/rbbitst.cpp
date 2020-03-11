@@ -4618,7 +4618,7 @@ void RBBITest::TestBug12677() {
     RuleBasedBreakIterator bi(rules, pe, status);
     assertSuccess(WHERE, status);
     UnicodeString rtRules = bi.getRules();
-    assertEquals(WHERE, UnicodeString(u"!!forward; $x = [ab#]; '#' '?'; "),  rtRules);
+    assertEquals(WHERE, UnicodeString(u"!!forward;$x=[ab#];'#''?';"),  rtRules);
 }
 
 
@@ -4632,6 +4632,7 @@ void RBBITest::TestTableRedundancies() {
 
     RBBIDataWrapper *dw = bi->fData;
     const RBBIStateTable *fwtbl = dw->fForwardTable;
+    UBool in8Bits = fwtbl->fFlags & RBBI_8BITS_ROWS;
     int32_t numCharClasses = dw->fHeader->fCatCount;
     // printf("Char Classes: %d     states: %d\n", numCharClasses, fwtbl->fNumStates);
 
@@ -4642,7 +4643,7 @@ void RBBITest::TestTableRedundancies() {
         UnicodeString s;
         for (int32_t r = 1; r < (int32_t)fwtbl->fNumStates; r++) {
             RBBIStateTableRow  *row = (RBBIStateTableRow *) (fwtbl->fTableData + (fwtbl->fRowLen * r));
-            s.append(row->fNextState[column]);
+            s.append(in8Bits ? row->s8.fNextState[column] : row->s16.fNextState[column]);
         }
         columns.push_back(s);
     }
@@ -4662,12 +4663,22 @@ void RBBITest::TestTableRedundancies() {
     for (int32_t r=0; r < (int32_t)fwtbl->fNumStates; r++) {
         UnicodeString s;
         RBBIStateTableRow  *row = (RBBIStateTableRow *) (fwtbl->fTableData + (fwtbl->fRowLen * r));
-        assertTrue(WHERE, row->fAccepting >= -1);
-        s.append(row->fAccepting + 1);   // values of -1 are expected.
-        s.append(row->fLookAhead);
-        s.append(row->fTagIdx);
-        for (int32_t column = 0; column < numCharClasses; column++) {
-            s.append(row->fNextState[column]);
+        if (in8Bits) {
+            assertTrue(WHERE, row->s8.fAccepting >= -1);
+            s.append(row->s8.fAccepting + 1);   // values of -1 are expected.
+            s.append(row->s8.fLookAhead);
+            s.append(row->s8.fTagIdx);
+            for (int32_t column = 0; column < numCharClasses; column++) {
+                s.append(row->s8.fNextState[column]);
+            }
+        } else {
+            assertTrue(WHERE, row->s16.fAccepting >= -1);
+            s.append(row->s16.fAccepting + 1);   // values of -1 are expected.
+            s.append(row->s16.fLookAhead);
+            s.append(row->s16.fTagIdx);
+            for (int32_t column = 0; column < numCharClasses; column++) {
+                s.append(row->s16.fNextState[column]);
+            }
         }
         rows.push_back(s);
     }
@@ -4740,12 +4751,14 @@ void RBBITest::TestReverse(std::unique_ptr<RuleBasedBreakIterator>bi) {
 
     RBBIDataWrapper *data = bi->fData;
     int32_t categoryCount = data->fHeader->fCatCount;
-    UTrie2  *trie = data->fTrie;
+    UCPTrie *trie = data->fTrie;
+    bool use8BitsTrie = ucptrie_getValueWidth(trie) == UCPTRIE_VALUE_BITS_8;
+    uint32_t dict_bit = use8BitsTrie ? 0x0080 : 0x4000;
 
     std::vector<UnicodeString> strings(categoryCount, UnicodeString());
     for (int cp=0; cp<0x1fff0; ++cp) {
-        int cat = utrie2_get32(trie, cp);
-        cat &= ~0x4000;    // And off the dictionary bit from the category.
+        int cat = ucptrie_get(trie, cp);
+        cat &= ~dict_bit;    // And off the dictionary bit from the category.
         assertTrue(WHERE, cat < categoryCount && cat >= 0);
         if (cat < 0 || cat >= categoryCount) return;
         strings[cat].append(cp);

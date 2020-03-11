@@ -16,6 +16,7 @@ import java.util.Arrays;
 
 import com.ibm.icu.impl.ICUBinary.Authenticate;
 import com.ibm.icu.text.RuleBasedBreakIterator;
+import com.ibm.icu.util.CodePointTrie;
 
 /**
 * <p>Internal class used for Rule Based Break Iterators.</p>
@@ -50,7 +51,8 @@ public final class RBBIDataWrapper {
         /**
          * Linear array of next state values, accessed as short[state, char_class]
          */
-        public short[] fTable;
+        public short[] fTable16;
+        public byte[] fTable8;
 
         public RBBIStateTable() {
         }
@@ -67,8 +69,13 @@ public final class RBBIDataWrapper {
             This.fRowLen    = bytes.getInt();
             This.fFlags     = bytes.getInt();
             This.fReserved  = bytes.getInt();
-            int lengthOfShorts = length - 16;   // length in bytes.
-            This.fTable     = ICUBinary.getShorts(bytes, lengthOfShorts / 2, lengthOfShorts & 1);
+            int lengthOfTable = length - 16;   // length in bytes.
+            boolean use8Bits = (This.fFlags & RBBIDataWrapper.RBBI_8BITS_ROWS) == RBBIDataWrapper.RBBI_8BITS_ROWS;
+            if (use8Bits) {
+                This.fTable8     = ICUBinary.getBytes(bytes, lengthOfTable, lengthOfTable & 1);
+            } else {
+                This.fTable16    = ICUBinary.getShorts(bytes, lengthOfTable / 2, lengthOfTable & 1);
+            }
             return This;
         }
 
@@ -77,9 +84,14 @@ public final class RBBIDataWrapper {
             bytes.writeInt(fRowLen);
             bytes.writeInt(fFlags);
             bytes.writeInt(fReserved);
-            int tableLen = fRowLen * fNumStates / 2;  // fRowLen is bytes.
-            for (int i = 0; i < tableLen; i++) {
-                bytes.writeShort(fTable[i]);
+            if ((fFlags & RBBIDataWrapper.RBBI_8BITS_ROWS) == RBBIDataWrapper.RBBI_8BITS_ROWS) {
+                int tableLen = fRowLen * fNumStates;  // fRowLen is bytes.
+                bytes.write(fTable8, 0, tableLen);
+            } else {
+                int tableLen = fRowLen * fNumStates / 2;  // fRowLen is bytes.
+                for (int i = 0; i < tableLen; i++) {
+                    bytes.writeShort(fTable16[i]);
+                }
             }
             int bytesWritten = 16 + fRowLen * fNumStates;   // total bytes written,
                                                             // including 16 for the header.
@@ -106,7 +118,7 @@ public final class RBBIDataWrapper {
             if (fRowLen    != otherST.fRowLen)    return false;
             if (fFlags     != otherST.fFlags)     return false;
             if (fReserved  != otherST.fReserved)  return false;
-            return Arrays.equals(fTable, otherST.fTable);
+            return Arrays.equals(fTable16, otherST.fTable16) && Arrays.equals(fTable8, otherST.fTable8);
         }
     }
 
@@ -134,12 +146,12 @@ public final class RBBIDataWrapper {
 
     public RBBIStateTable   fRTable;
 
-    public Trie2   fTrie;
+    public CodePointTrie    fTrie;
     public String  fRuleSource;
     public int     fStatusTable[];
 
     public static final int DATA_FORMAT = 0x42726b20;     // "Brk "
-    public static final int FORMAT_VERSION = 0x05000000;  // 4.0.0.0
+    public static final int FORMAT_VERSION = 0x06000000;  // 6.0.0.0
 
     private static final class IsAcceptable implements Authenticate {
         @Override
@@ -200,6 +212,10 @@ public final class RBBIDataWrapper {
     //
     public final static int      RBBI_LOOKAHEAD_HARD_BREAK = 1;
     public final static int      RBBI_BOF_REQUIRED         = 2;
+    public final static int      RBBI_8BITS_ROWS           = 4;
+
+    public final static int      DICT_BIT                  = 0x4000;
+    public final static int      DICT_BIT_FOR_8BITS_TRIE   = 0x0080;
 
     /**
      * Data Header.  A struct-like class with the fields from the RBBI data file header.
@@ -330,7 +346,10 @@ public final class RBBIDataWrapper {
                                                 //  as we don't go more than 100 bytes past the
                                                 //  past the end of the TRIE.
 
-        This.fTrie = Trie2.createFromSerialized(bytes);  // Deserialize the TRIE, leaving buffer
+        This.fTrie = CodePointTrie.fromBinary(
+            CodePointTrie.Type.FAST,
+            null,
+            bytes);  // Deserialize the TRIE, leaving buffer
                                                 //  at an unknown position, preceding the
                                                 //  padding between TRIE and following section.
 
@@ -359,8 +378,8 @@ public final class RBBIDataWrapper {
         }
         ICUBinary.skipBytes(bytes, This.fHeader.fRuleSource - pos);
         pos = This.fHeader.fRuleSource;
-        This.fRuleSource = ICUBinary.getString(
-                bytes, This.fHeader.fRuleSourceLen / 2, This.fHeader.fRuleSourceLen & 1);
+        This.fRuleSource = new String(
+            ICUBinary.getBytes(bytes, This.fHeader.fRuleSourceLen, 0), "UTF8");
 
         if (RuleBasedBreakIterator.fDebugEnv!=null && RuleBasedBreakIterator.fDebugEnv.indexOf("data")>=0) {
             This.dump(System.out);
@@ -408,7 +427,7 @@ public final class RBBIDataWrapper {
 
     /** Dump a state table.  (A full set of RBBI rules has 4 state tables.)  */
     private void dumpTable(java.io.PrintStream out, RBBIStateTable table) {
-        if (table == null || table.fTable.length == 0)   {
+        if (table == null || (table.fTable16 != null ? table.fTable16.length == 0 : table.fTable8.length == 0))   {
             out.println("  -- null -- ");
         } else {
             int n;
@@ -438,20 +457,38 @@ public final class RBBIDataWrapper {
         StringBuilder dest = new StringBuilder(fHeader.fCatCount*5 + 20);
         dest.append(intToString(state, 4));
         int row = getRowIndex(state);
-        if (table.fTable[row+ACCEPTING] != 0) {
-           dest.append(intToString(table.fTable[row+ACCEPTING], 5));
-        }else {
-            dest.append("     ");
-        }
-        if (table.fTable[row+LOOKAHEAD] != 0) {
-            dest.append(intToString(table.fTable[row+LOOKAHEAD], 5));
-        }else {
-            dest.append("     ");
-        }
-        dest.append(intToString(table.fTable[row+TAGIDX], 5));
+        if (table.fTable8 != null) {
+            if (table.fTable8[row+ACCEPTING] != 0) {
+                dest.append(intToString(table.fTable8[row+ACCEPTING], 5));
+            } else {
+                dest.append("     ");
+            }
+            if (table.fTable8[row+LOOKAHEAD] != 0) {
+                dest.append(intToString(table.fTable8[row+LOOKAHEAD], 5));
+            } else {
+                dest.append("     ");
+            }
+            dest.append(intToString(table.fTable8[row+TAGIDX], 5));
 
-        for (int col=0; col<fHeader.fCatCount; col++) {
-            dest.append(intToString(table.fTable[row+NEXTSTATES+col], 5));
+            for (int col=0; col<fHeader.fCatCount; col++) {
+                dest.append(intToString(table.fTable8[row+NEXTSTATES+col], 5));
+            }
+        } else {
+            if (table.fTable16[row+ACCEPTING] != 0) {
+                dest.append(intToString(table.fTable16[row+ACCEPTING], 5));
+            } else {
+                dest.append("     ");
+            }
+            if (table.fTable16[row+LOOKAHEAD] != 0) {
+                dest.append(intToString(table.fTable16[row+LOOKAHEAD], 5));
+            } else {
+                dest.append("     ");
+            }
+            dest.append(intToString(table.fTable16[row+TAGIDX], 5));
+
+            for (int col=0; col<fHeader.fCatCount; col++) {
+                dest.append(intToString(table.fTable16[row+NEXTSTATES+col], 5));
+            }
         }
 
         out.println(dest);
@@ -466,6 +503,7 @@ public final class RBBIDataWrapper {
         int      char32;
         int      category;
         int      lastNewline[] = new int[n+1];
+        int      dict_mask = fTrie.getValueWidth() ==  CodePointTrie.ValueWidth.BITS_8 ? DICT_BIT_FOR_8BITS_TRIE : DICT_BIT;
 
         for (category = 0; category <= fHeader.fCatCount; category ++) {
             catStrings[category] = "";
@@ -474,7 +512,7 @@ public final class RBBIDataWrapper {
         out.println("--------------------");
         for (char32 = 0; char32<=0x10ffff; char32++) {
             category = fTrie.get(char32);
-            category &= ~0x4000;            // Mask off dictionary bit.
+            category &= ~dict_mask;            // Mask off dictionary bit.
             if (category < 0 || category > fHeader.fCatCount) {
                 out.println("Error, bad category " + Integer.toHexString(category) +
                         " for char " + Integer.toHexString(char32));

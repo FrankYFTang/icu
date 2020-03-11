@@ -22,6 +22,7 @@
 #include "unicode/uniset.h"
 #include "unicode/uchar.h"
 #include "unicode/uchriter.h"
+#include "unicode/ustring.h"
 #include "unicode/parsepos.h"
 #include "unicode/parseerr.h"
 
@@ -148,13 +149,19 @@ RBBIDataHeader *RBBIRuleBuilder::flattenData() {
     //   Sizes here are padded up to a multiple of 8 for better memory alignment.
     //   Sections sizes actually stored in the header are for the actual data
     //     without the padding.
-    //
+
     int32_t headerSize        = align8(sizeof(RBBIDataHeader));
     int32_t forwardTableSize  = align8(fForwardTable->getTableSize());
     int32_t reverseTableSize  = align8(fForwardTable->getSafeTableSize());
     int32_t trieSize          = align8(fSetBuilder->getTrieSize());
     int32_t statusTableSize   = align8(fRuleStatusVals->size() * sizeof(int32_t));
-    int32_t rulesSize         = align8((fStrippedRules.length()+1) * sizeof(UChar));
+
+    int32_t rulesLengthInUTF8 = 0;
+    u_strToUTF8WithSub(0, 0, &rulesLengthInUTF8,
+                       fStrippedRules.getTerminatedBuffer(), -1, 0xfffd, nullptr, fStatus);
+    *fStatus = U_ZERO_ERROR;
+
+    int32_t rulesSize         = align8((rulesLengthInUTF8+1));
 
     int32_t         totalSize = headerSize
                                 + forwardTableSize
@@ -201,7 +208,7 @@ RBBIDataHeader *RBBIRuleBuilder::flattenData() {
     data->fStatusTable   = data->fTrie    + trieSize;
     data->fStatusTableLen= statusTableSize;
     data->fRuleSource    = data->fStatusTable + statusTableSize;
-    data->fRuleSourceLen = fStrippedRules.length() * sizeof(UChar);
+    data->fRuleSourceLen = rulesLengthInUTF8;
 
     uprv_memset(data->fReserved, 0, sizeof(data->fReserved));
 
@@ -214,7 +221,11 @@ RBBIDataHeader *RBBIRuleBuilder::flattenData() {
         ruleStatusTable[i] = fRuleStatusVals->elementAti(i);
     }
 
-    fStrippedRules.extract((UChar *)((uint8_t *)data+data->fRuleSource), rulesSize/2+1, *fStatus);
+    u_strToUTF8WithSub((char *)data+data->fRuleSource, rulesSize, &rulesLengthInUTF8,
+                       fStrippedRules.getTerminatedBuffer(), -1, 0xfffd, nullptr, fStatus);
+    if (U_FAILURE(*fStatus)) {
+        return NULL;
+    }
 
     return data;
 }

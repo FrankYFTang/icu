@@ -74,6 +74,8 @@ class RBBITableBuilder {
     /** Synthesized safe table, a List of row arrays.  */
     private List<short[]>    fSafeTable;
 
+    private static final int STATE_THRESHOLD_FOR_8_BITS_TABLE = 127;
+
     /** Map from rule number (fVal in look ahead nodes) to sequential lookahead index. */
     int[] fLookAheadRuleMap;
 
@@ -1100,7 +1102,8 @@ class RBBITableBuilder {
            int size    = 16;    // The header of 4 ints, with no rows to the table.
            int numRows = fDStates.size();
            int numCols = fRB.fSetBuilder.getNumCharCategories();
-           int rowSize = 8 + 2*numCols;
+           boolean use8Bits = numRows < STATE_THRESHOLD_FOR_8_BITS_TABLE;
+           int rowSize = use8Bits ? (4 + numCols) : (8 + 2*numCols);
            size   += numRows * rowSize;
            size = (size + 7) & ~7;   // round up to a multiple of 8 bytes
            return size;
@@ -1125,13 +1128,21 @@ class RBBITableBuilder {
            Assert.assrt(fRB.fSetBuilder.getNumCharCategories() < 0x7fff &&
                fDStates.size() < 0x7fff);
            table.fNumStates = fDStates.size();
+           boolean use8Bits = table.fNumStates < STATE_THRESHOLD_FOR_8_BITS_TABLE;
 
            // Size of table size in shorts.
            //  the "4" is the size of struct RBBIStateTableRow, the row header part only.
            int rowLen = 4 + fRB.fSetBuilder.getNumCharCategories();   // Row Length in shorts.
-           int tableSize = (getTableSize() - 16) / 2;       // fTable length in shorts.
-           table.fTable = new short[tableSize];
-           table.fRowLen = rowLen * 2;                      // Row length in bytes.
+           int tableSize;
+           if (use8Bits) {
+               tableSize = (getTableSize() - 16);       // fTable length in bytes.
+               table.fTable8 = new byte[tableSize];
+               table.fRowLen = rowLen;                          // Row length in bytes.
+           } else {
+               tableSize = (getTableSize() - 16) / 2;   // fTable length in shorts.
+               table.fTable16 = new short[tableSize];
+               table.fRowLen = rowLen * 2;                      // Row length in bytes.
+           }
 
            if (fRB.fLookAheadHardBreak) {
                table.fFlags  |= RBBIDataWrapper.RBBI_LOOKAHEAD_HARD_BREAK;
@@ -1139,18 +1150,32 @@ class RBBITableBuilder {
            if (fRB.fSetBuilder.sawBOF()) {
                table.fFlags  |= RBBIDataWrapper.RBBI_BOF_REQUIRED;
            }
+           if (use8Bits) {
+               table.fFlags  |= RBBIDataWrapper.RBBI_8BITS_ROWS;
+           }
 
            int numCharCategories = fRB.fSetBuilder.getNumCharCategories();
            for (state=0; state<table.fNumStates; state++) {
                RBBIStateDescriptor sd = fDStates.get(state);
                int row = state*rowLen;
-               Assert.assrt (-32768 < sd.fAccepting && sd.fAccepting <= 32767);
-               Assert.assrt (-32768 < sd.fLookAhead && sd.fLookAhead <= 32767);
-               table.fTable[row + RBBIDataWrapper.ACCEPTING] = (short)sd.fAccepting;
-               table.fTable[row + RBBIDataWrapper.LOOKAHEAD] = (short)sd.fLookAhead;
-               table.fTable[row + RBBIDataWrapper.TAGIDX]    = (short)sd.fTagsIdx;
-               for (col=0; col<numCharCategories; col++) {
-                   table.fTable[row + RBBIDataWrapper.NEXTSTATES + col] = (short)sd.fDtran[col];
+               if (use8Bits) {
+                   Assert.assrt (-128 < sd.fAccepting && sd.fAccepting < STATE_THRESHOLD_FOR_8_BITS_TABLE);
+                   Assert.assrt (-128 < sd.fLookAhead && sd.fLookAhead < STATE_THRESHOLD_FOR_8_BITS_TABLE);
+                   table.fTable8[row + RBBIDataWrapper.ACCEPTING] = (byte)sd.fAccepting;
+                   table.fTable8[row + RBBIDataWrapper.LOOKAHEAD] = (byte)sd.fLookAhead;
+                   table.fTable8[row + RBBIDataWrapper.TAGIDX]    = (byte)sd.fTagsIdx;
+                   for (col=0; col<numCharCategories; col++) {
+                       table.fTable8[row + RBBIDataWrapper.NEXTSTATES + col] = (byte)sd.fDtran[col];
+                   }
+               } else {
+                   Assert.assrt (-32768 < sd.fAccepting && sd.fAccepting <= 32767);
+                   Assert.assrt (-32768 < sd.fLookAhead && sd.fLookAhead <= 32767);
+                   table.fTable16[row + RBBIDataWrapper.ACCEPTING] = (short)sd.fAccepting;
+                   table.fTable16[row + RBBIDataWrapper.LOOKAHEAD] = (short)sd.fLookAhead;
+                   table.fTable16[row + RBBIDataWrapper.TAGIDX]    = (short)sd.fTagsIdx;
+                   for (col=0; col<numCharCategories; col++) {
+                       table.fTable16[row + RBBIDataWrapper.NEXTSTATES + col] = (short)sd.fDtran[col];
+                   }
                }
            }
            return table;
@@ -1253,7 +1278,9 @@ class RBBITableBuilder {
            int size    = 16;    // The header of 4 ints, with no rows to the table.
            int numRows = fSafeTable.size();
            int numCols = fSafeTable.get(0).length;
-           int rowSize = 8 + 2*numCols;
+           boolean use8Bits = numRows < STATE_THRESHOLD_FOR_8_BITS_TABLE;
+
+           int rowSize = use8Bits ? (4 + numCols) : (8 + 2*numCols);
            size += numRows * rowSize;
            // TODO: there are redundant round-up. Figure out best place, get rid of the rest.
            size = (size + 7) & ~7;   // round up to a multiple of 8 bytes
@@ -1269,6 +1296,7 @@ class RBBITableBuilder {
        RBBIDataWrapper.RBBIStateTable exportSafeTable() {
            RBBIDataWrapper.RBBIStateTable table = new RBBIDataWrapper.RBBIStateTable();
            table.fNumStates = fSafeTable.size();
+           boolean use8Bits = table.fNumStates < STATE_THRESHOLD_FOR_8_BITS_TABLE;
            int numCharCategories = fSafeTable.get(0).length;
 
            // Size of table size in shorts.
@@ -1276,16 +1304,27 @@ class RBBITableBuilder {
            int rowLen = 4 + numCharCategories;
            // TODO: tableSize is basically numStates * numCharCategories,
            //       except for alignment padding. Clean up here, and in main exportTable().
-           int tableSize = (getSafeTableSize() - 16) / 2;   // fTable length in shorts.
-           table.fTable = new short[tableSize];
-           table.fRowLen = rowLen * 2;                      // Row length in bytes.
+           int tableSize = (getSafeTableSize() - 16);           // fTable length in bytes.
+           if (use8Bits) {
+               table.fFlags  |= RBBIDataWrapper.RBBI_8BITS_ROWS;
+               table.fTable8 = new byte[tableSize];
+               table.fRowLen = rowLen;                          // Row length in bytes.
+           } else {
+               tableSize /= 2;   // fTable length in shorts.
+               table.fTable16 = new short[tableSize];
+               table.fRowLen = rowLen * 2;                      // Row length in bytes.
+           }
 
            for (int state=0; state<table.fNumStates; state++) {
                short[] rowArray = fSafeTable.get(state);
                int row = state * rowLen;
 
                for (int col=0; col<numCharCategories; col++) {
-                   table.fTable[row + RBBIDataWrapper.NEXTSTATES + col] = rowArray[col];
+                   if (use8Bits) {
+                       table.fTable8[row + RBBIDataWrapper.NEXTSTATES + col] = (byte)rowArray[col];
+                   } else {
+                       table.fTable16[row + RBBIDataWrapper.NEXTSTATES + col] = rowArray[col];
+                   }
                }
            }
            return table;

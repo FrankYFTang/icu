@@ -64,6 +64,27 @@ class RuleBasedBreakIterator::DictionaryCache: public UMemory {
                                                 //    text segment being handled by the dictionary.
     int32_t             fFirstRuleStatusIndex;  // Rule status info for first boundary.
     int32_t             fOtherRuleStatusIndex;  // Rule status info for 2nd through last boundaries.
+
+  private:
+    /*
+     * Templatatized version of populateDictionary().
+     *
+     * There will be exactly two instantiations, one each for 8 and 16 bit tables.
+     * Having separate instantiations for the table types keeps conditional tests of
+     * the table type out of the inner loops, at the expense of replicated code.
+     *
+     * The template parameter for the Trie access function is a value, not a type.
+     * Doing it this way, the compiler will inline the Trie function in the
+     * expanded functions. (Both the 8 and 16 bit access functions have the same type
+     * signature)
+     */
+
+    typedef uint16_t (*PTrieFunc)(const UCPTrie *, UChar32);
+
+    template<PTrieFunc trieFunc, uint16_t dictMask>
+    void populateDictionary(int32_t startPos, int32_t endPos,
+                         int32_t firstRuleStatus, int32_t otherRuleStatus);
+
 };
 
 
