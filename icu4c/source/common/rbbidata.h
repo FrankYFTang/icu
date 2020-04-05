@@ -93,36 +93,35 @@ struct RBBIDataHeader {
 };
 
 
-
-#define DECLARE_STATE_TABLE_ROW_STRUCT(name, T) \
-struct  name { \
-    T                fAccepting;    /*  Non-zero if this row is for an accepting state.   */ \
-                                    /*  Value 0: not an accepting state.                  */ \
-                                    /*       -1: Unconditional Accepting state.           */ \
-                                    /*    positive:  Look-ahead match has completed.      */ \
-                                    /*           Actual boundary position happened earlier */ \
-                                    /*           Value here == fLookAhead in earlier      */ \
-                                    /*              state, at actual boundary pos.        */ \
-    T                fLookAhead;    /*  Non-zero if this row is for a state that          */ \
-                                    /*    corresponds to a '/' in the rule source.        */ \
-                                    /*    Value is the same as the fAccepting             */ \
-                                    /*      value for the rule (which will appear         */ \
-                                    /*      in a different state.                         */ \
-    T                fTagIdx;       /*  Non-zero if this row covers a {tagged} position   */ \
-                                    /*     from a rule.  Value is the index in the        */ \
-                                    /*     StatusTable of the set of matching             */ \
-                                    /*     tags (rule status values)                      */ \
-    T                fReserved; \
-    T                fNextState[1]; /*  Next State, indexed by char category.             */ \
-                                    /*    Variable-length array declared with length 1    */ \
-                                    /*    to disable bounds checkers.                     */ \
-                                    /*    Array Size is actually fData->fHeader->fCatCount*/ \
-                                    /*    CAUTION:  see RBBITableBuilder::getTableSize()  */ \
-                                    /*              before changing anything here.        */ \
+template <typename T>
+struct RBBIStateTableRowT {
+    T                fAccepting;    /*  Non-zero if this row is for an accepting state.   */
+                                    /*  Value 0: not an accepting state.                  */
+                                    /*       -1: Unconditional Accepting state.           */
+                                    /*    positive:  Look-ahead match has completed.      */
+                                    /*           Actual boundary position happened earlier */
+                                    /*           Value here == fLookAhead in earlier      */
+                                    /*              state, at actual boundary pos.        */
+    T                fLookAhead;    /*  Non-zero if this row is for a state that          */
+                                    /*    corresponds to a '/' in the rule source.        */
+                                    /*    Value is the same as the fAccepting             */
+                                    /*      value for the rule (which will appear         */
+                                    /*      in a different state.                         */
+    T                fTagIdx;       /*  Non-zero if this row covers a {tagged} position   */
+                                    /*     from a rule.  Value is the index in the        */
+                                    /*     StatusTable of the set of matching             */
+                                    /*     tags (rule status values)                      */
+    T                fReserved;
+    T                fNextState[1]; /*  Next State, indexed by char category.             */
+                                    /*    Variable-length array declared with length 1    */
+                                    /*    to disable bounds checkers.                     */
+                                    /*    Array Size is actually fData->fHeader->fCatCount*/
+                                    /*    CAUTION:  see RBBITableBuilder::getTableSize()  */
+                                    /*              before changing anything here.        */
 };
 
-DECLARE_STATE_TABLE_ROW_STRUCT(RBBIStateTableRowS16, int16_t)
-DECLARE_STATE_TABLE_ROW_STRUCT(RBBIStateTableRowS8, int8_t)
+typedef RBBIStateTableRowT<int8_t> RBBIStateTableRowS8;
+typedef RBBIStateTableRowT<int16_t> RBBIStateTableRowS16;
 
 union RBBIStateTableRow {
   RBBIStateTableRowS16 s16;

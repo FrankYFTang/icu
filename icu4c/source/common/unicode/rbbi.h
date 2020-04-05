@@ -645,6 +645,10 @@ private:
      */
     int32_t handleSafePrevious(int32_t fromPosition);
 
+    template<typename RowType, typename TrieAccess>
+    int32_t handleSafePrevious(RowType *tableRow, TrieAccess trieFunc, int32_t dictMask,
+                               int32_t fromPosition);
+
     /**
      * Find a rule-based boundary by running the state machine.
      * Input
@@ -658,6 +662,15 @@ private:
      * @internal (private)
      */
     int32_t handleNext();
+
+    /**
+     * Templatatized version of handleNext()
+     * There will be exactly two instantiations, one each for 8 and 16 bit tables.
+     * Having separate instantiations for the table types keeps conditional tests of
+     * the table type out of the inner loops, at the expense of replicated code.
+     */
+    template<typename RowType, typename TrieAccess>
+    int32_t handleNext(RowType *tableRow, TrieAccess trieFunc, int32_t dictMask);
 
 
     /**
