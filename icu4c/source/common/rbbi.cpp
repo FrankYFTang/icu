@@ -36,6 +36,7 @@
 #include "rbbirb.h"
 #include "uassert.h"
 #include "umutex.h"
+#include "utrie2.h"
 #include "uvectr32.h"
 
 #ifdef RBBI_DEBUG
@@ -748,6 +749,35 @@ struct LookAheadResults {
 };
 
 
+// Wrapper functions to select the appropriate handleNext() or handleSafePrevious()
+// instantiation, based on whether an 8 or 16 bit table is required.
+//
+// These Trie access functions will be inlined within the handleNext()/Previous() instantions.
+static inline uint16_t TrieFunc8(const UTrie2 *trie, UChar32 c) {
+    return UTRIE2_GET8(trie, c);
+};
+
+static inline uint16_t TrieFunc16(const UTrie2 *trie, UChar32 c) {
+    return UTRIE2_GET16(trie, c);
+};
+
+int32_t RuleBasedBreakIterator::handleNext() {
+    const RBBIStateTable *statetable = fData->fForwardTable;
+    if (statetable->fFlags & RBBI_8BITS_ROWS) {
+        return handleNext<RBBIStateTableRowS8, TrieFunc8, DICT_BIT_FOR_8BITS_TRIE> ();
+    } else {
+        return handleNext<RBBIStateTableRowS16, TrieFunc16, DICT_BIT>();
+    }
+}
+
+int32_t RuleBasedBreakIterator::handleSafePrevious(int32_t fromPosition) {
+    const RBBIStateTable *statetable = fData->fReverseTable;
+    if (statetable->fFlags & RBBI_8BITS_ROWS) {
+        return handleSafePrevious<RBBIStateTableRowS8, TrieFunc8, DICT_BIT_FOR_8BITS_TRIE>(fromPosition);
+    } else {
+        return handleSafePrevious<RBBIStateTableRowS16, TrieFunc16, DICT_BIT>(fromPosition);
+    }
+}
 
 
 //-----------------------------------------------------------------------------------
@@ -756,13 +786,8 @@ struct LookAheadResults {
 //     Run the state machine to find a boundary
 //
 //-----------------------------------------------------------------------------------
-template <typename RowType, typename TrieAccess>
-int32_t RuleBasedBreakIterator::handleNext(RowType *tableRows,
-                                           TrieAccess trieFunc,
-                                           int32_t dictMask
-                                          ) {
-    (void)tableRows;   // Parameter's type is required. Value is not used.
-
+template <typename RowType, RuleBasedBreakIterator::PTrieFunc trieFunc, uint16_t dictMask>
+int32_t RuleBasedBreakIterator::handleNext() {
     int32_t             state;
     uint16_t            category        = 0;
     RBBIRunMode         mode;
@@ -949,48 +974,8 @@ int32_t RuleBasedBreakIterator::handleNext(RowType *tableRows,
 }
 
 
-int32_t RuleBasedBreakIterator::handleNext() {
-    const RBBIStateTable *statetable = fData->fForwardTable;
-    if (statetable->fFlags & RBBI_8BITS_ROWS) {
-        return handleNext(reinterpret_cast<const RBBIStateTableRowS8 *>(statetable->fTableData),
-                          [](const UTrie2 *trie, UChar32 c) { return UTRIE2_GET8(trie, c); },
-                          DICT_BIT_FOR_8BITS_TRIE
-                         );
-    } else {
-        return handleNext(reinterpret_cast<const RBBIStateTableRowS16 *>(statetable->fTableData),
-                          [](const UTrie2 *trie, UChar32 c) { return UTRIE2_GET16(trie, c); },
-                          DICT_BIT
-                         );
-    }
-}
-
-
+template <typename RowType, RuleBasedBreakIterator::PTrieFunc trieFunc, uint16_t dictMask>
 int32_t RuleBasedBreakIterator::handleSafePrevious(int32_t fromPosition) {
-    const RBBIStateTable *statetable = fData->fReverseTable;
-    if (statetable->fFlags & RBBI_8BITS_ROWS) {
-        return handleSafePrevious(
-            reinterpret_cast<const RBBIStateTableRowS8 *>(statetable->fTableData),
-            [](const UTrie2 *trie, UChar32 c) { return UTRIE2_GET8(trie, c); },
-            DICT_BIT_FOR_8BITS_TRIE,
-            fromPosition);
-    } else {
-        return handleSafePrevious(
-            reinterpret_cast<const RBBIStateTableRowS16 *>(statetable->fTableData),
-            [](const UTrie2 *trie, UChar32 c) { return UTRIE2_GET16(trie, c); },
-            DICT_BIT,
-            fromPosition);
-    }
-}
-
-
-
-template<typename RowType, typename TrieAccess>
-int32_t RuleBasedBreakIterator::handleSafePrevious(RowType *tableRow,
-                                                   TrieAccess trieFunc,
-                                                   int32_t dictMask,
-                                                   int32_t fromPosition
-                                                  ) {
-    (void)tableRow;
 
     int32_t             state;
     uint16_t            category        = 0;
