@@ -204,8 +204,8 @@ RBBIDataHeader *RBBIRuleBuilder::flattenData() {
     data->fRTableLen     = reverseTableSize;
 
     data->fTrie          = data->fRTable + data->fRTableLen;
-    data->fTrieLen       = fSetBuilder->getTrieSize();
-    data->fStatusTable   = data->fTrie    + trieSize;
+    data->fTrieLen       = trieSize;
+    data->fStatusTable   = data->fTrie    + data->fTrieLen;
     data->fStatusTableLen= statusTableSize;
     data->fRuleSource    = data->fStatusTable + statusTableSize;
     data->fRuleSourceLen = rulesLengthInUTF8;

@@ -281,7 +281,6 @@ ucptrie_swap(const UDataSwapper *ds,
             return 0;
         }
     }
-
     return size;
 }
 
