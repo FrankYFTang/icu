@@ -87,7 +87,7 @@ public:
 
     void TestDebug();
     void TestProperties();
-    void TestDifferntTrieStateTableBits();
+    void TestDifferentTrieStateTableBits();
 
 #if U_ENABLE_TRACING
     void TestTraceCreateCharacter();

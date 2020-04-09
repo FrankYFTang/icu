@@ -1,4 +1,4 @@
-// © 2016 and later: Unicode, Inc. and others.
+
 // License & terms of use: http://www.unicode.org/copyright.html
 /********************************************************************
  * COPYRIGHT:
@@ -128,7 +128,7 @@ void RBBITest::runIndexedTest( int32_t index, UBool exec, const char* &name, cha
     TESTCASE_AUTO(TestReverse);
     TESTCASE_AUTO(TestBug13692);
     TESTCASE_AUTO(TestDebugRules);
-    TESTCASE_AUTO(TestDifferntTrieStateTableBits);
+    TESTCASE_AUTO(TestDifferentTrieStateTableBits);
 
 #if U_ENABLE_TRACING
     TESTCASE_AUTO(TestTraceCreateCharacter);
@@ -4918,7 +4918,8 @@ void RBBITest::testTrieStateTable(int32_t numChar, UCPTrieValueWidth expectedTri
     assertEquals("Number of char classes mismatch", numChar + 4, bi->fData->fHeader->fCatCount);
     assertEquals("Number of states mismatch", numChar + 3, bi->fData->fForwardTable->fNumStates);
     assertEquals("Trie width mismatch", expectedTrieWidth, ucptrie_getValueWidth(bi->fData->fTrie));
-    assertEquals("Bits of State table mismatch", expectedStateRowBits, bi->fData->fForwardTable->fFlags & RBBI_8BITS_ROWS);
+    assertEquals("Bits of Forward State table mismatch", expectedStateRowBits, bi->fData->fForwardTable->fFlags & RBBI_8BITS_ROWS);
+    assertEquals("Bits of Reverse State table mismatch", expectedStateRowBits, bi->fData->fReverseTable->fFlags & RBBI_8BITS_ROWS);
 
     bi->setText(text);
 
@@ -4933,12 +4934,65 @@ void RBBITest::testTrieStateTable(int32_t numChar, UCPTrieValueWidth expectedTri
             assertEquals("next() mismatch", i + numChar, pos);
         }
     }
+    while ((pos = bi->previous()) > 0) {
+        // The firsr numChar should not break between the pair
+        if (--i < numChar) {
+            assertEquals("previous() mismatch", i * 2, pos);
+        } else {
+            // After the first numChar next(), break on each character.
+            assertEquals("previous() mismatch", i + numChar, pos);
+        }
+    }
 }
 
-void RBBITest::TestDifferntTrieStateTableBits() {
+void RBBITest::TestDifferentTrieStateTableBits() {
     testTrieStateTable(122, UCPTRIE_VALUE_BITS_8, RBBI_8BITS_ROWS);
     testTrieStateTable(123, UCPTRIE_VALUE_BITS_16, RBBI_8BITS_ROWS);
     testTrieStateTable(124, UCPTRIE_VALUE_BITS_16, 0 /* 16 bits rows */);
+
+    // Test UCPTRIE_VALUE_BITS_8 with 16 bits rows. Use a different approach to
+    // create state table in 16 bits.
+
+    // Generate 260 'a' as text
+    UnicodeString text("");
+    for (int32_t i = 0; i < 260; i++) {
+        text.append('a');
+    }
+
+    UnicodeString rules("!!quoted_literals_only;'");
+    // 125 'a' in the rule will cause 127 states
+    for (int32_t i = 0; i < 125; i++) {
+        rules.append('a');
+    }
+    rules.append("';.;");
+
+    UErrorCode status = U_ZERO_ERROR;
+    UParseError parseError;
+    LocalPointer<RuleBasedBreakIterator> bi(new RuleBasedBreakIterator(rules, parseError, status));
+
+    assertEquals("Number of states mismatch", 127, bi->fData->fForwardTable->fNumStates);
+    assertEquals("Trie width mismatch", UCPTRIE_VALUE_BITS_8, ucptrie_getValueWidth(bi->fData->fTrie));
+    assertEquals("Bits of Forward State table mismatch", 0, bi->fData->fForwardTable->fFlags & RBBI_8BITS_ROWS);
+    bi->setText(text);
+
+    // break positions:
+    // 125, 250, 251, 252 ... 259
+    assertEquals("next()", 125, bi->next());
+    int32_t i = 0;
+    int32_t pos;
+    while ((pos = bi->next()) > 0) {
+        assertEquals("next()", 250 + i , pos);
+        i++;
+    }
+    i = 0;
+    while ((pos = bi->previous()) > 0) {
+        i++;
+        if (pos >= 250) {
+            assertEquals("previous()", 260 - i , pos);
+        } else {
+            assertEquals("previous()", 125 , pos);
+        }
+    }
 }
 
 #if U_ENABLE_TRACING

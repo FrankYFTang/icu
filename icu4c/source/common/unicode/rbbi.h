@@ -705,8 +705,14 @@ private:
      */
     void dumpTables();
 
+    /**
+     * Bit for dictionary based category
+     */
     static constexpr int32_t kDictBit = 0x4000;
 
+    /**
+     * Bit for dictionary based category in 8bits trie
+     */
     static constexpr int32_t kDictBitFor8BitsTrie = 0x0080;
 
 #endif  /* U_HIDE_INTERNAL_API */
