@@ -128,6 +128,7 @@ void RBBITest::runIndexedTest( int32_t index, UBool exec, const char* &name, cha
     TESTCASE_AUTO(TestReverse);
     TESTCASE_AUTO(TestBug13692);
     TESTCASE_AUTO(TestDebugRules);
+    TESTCASE_AUTO(TestDifferntTrieStateTableBits);
 
 #if U_ENABLE_TRACING
     TESTCASE_AUTO(TestTraceCreateCharacter);
@@ -4894,6 +4895,50 @@ void RBBITest::TestDebugRules() {
 
     delete bi;
 #endif
+}
+
+void RBBITest::testTrieStateTable(int32_t numChar, UCPTrieValueWidth expectedTrieWidth,
+                                  int32_t expectedStateRowBits) {
+    // Text are duplicate characters from U+4E00 to U+4FFFF
+    UnicodeString text("");
+    for (UChar c = 0x4e00; c < 0x5000; c++) {
+        text.append(c).append(c);
+    }
+    // Generate rule which will caused length+4 character classes and
+    // length+3 states
+    UnicodeString rules("!!quoted_literals_only;");
+    for (UChar c = 0x4e00; c < 0x4e00 + numChar; c++) {
+        rules.append('\'').append(c).append(c).append("';");
+    }
+    rules.append(".;");
+    UErrorCode status = U_ZERO_ERROR;
+    UParseError parseError;
+    LocalPointer<RuleBasedBreakIterator> bi(new RuleBasedBreakIterator(rules, parseError, status));
+
+    assertEquals("Number of char classes mismatch", numChar + 4, bi->fData->fHeader->fCatCount);
+    assertEquals("Number of states mismatch", numChar + 3, bi->fData->fForwardTable->fNumStates);
+    assertEquals("Trie width mismatch", expectedTrieWidth, ucptrie_getValueWidth(bi->fData->fTrie));
+    assertEquals("Bits of State table mismatch", expectedStateRowBits, bi->fData->fForwardTable->fFlags & RBBI_8BITS_ROWS);
+
+    bi->setText(text);
+
+    int32_t pos;
+    int32_t i = 0;
+    while ((pos = bi->next()) > 0) {
+        // The firsr numChar should not break between the pair
+        if (i++ < numChar) {
+            assertEquals("next() mismatch", i * 2, pos);
+        } else {
+            // After the first numChar next(), break on each character.
+            assertEquals("next() mismatch", i + numChar, pos);
+        }
+    }
+}
+
+void RBBITest::TestDifferntTrieStateTableBits() {
+    testTrieStateTable(122, UCPTRIE_VALUE_BITS_8, RBBI_8BITS_ROWS);
+    testTrieStateTable(123, UCPTRIE_VALUE_BITS_16, RBBI_8BITS_ROWS);
+    testTrieStateTable(124, UCPTRIE_VALUE_BITS_16, 0 /* 16 bits rows */);
 }
 
 #if U_ENABLE_TRACING

@@ -22,6 +22,7 @@
 #include "intltest.h"
 #include "unicode/brkiter.h"
 #include "unicode/rbbi.h"
+#include "unicode/ucptrie.h"
 
 class  Enumeration;
 class  BITestData;
@@ -86,6 +87,7 @@ public:
 
     void TestDebug();
     void TestProperties();
+    void TestDifferntTrieStateTableBits();
 
 #if U_ENABLE_TRACING
     void TestTraceCreateCharacter();
@@ -132,6 +134,9 @@ private:
 
     // Test parameters, from the test framework and test invocation.
     const char* fTestParams;
+
+    // Helper functions to test different trie bit sizes and state table bit sizes.
+    void testTrieStateTable(int32_t numChar, UCPTrieValueWidth expectedTrieWidth, int32_t expectedStateRowBits);
 
 #if U_ENABLE_TRACING
     void assertTestTraceResult(int32_t fnNumber, const char* expectedData);
