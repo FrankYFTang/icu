@@ -117,19 +117,6 @@ UBool RuleBasedBreakIterator::DictionaryCache::preceding(int32_t fromPos, int32_
     UPRV_UNREACHABLE;
 }
 
-
-// Wrapper functions to select the appropriate populateDictionary()
-// instantiation, based on whether an 8 or 16 bit table is required.
-//
-// These Trie access functions will be inlined within the handleNext()/Previous() instantions.
-static inline uint16_t TrieFunc8(const UCPTrie *trie, UChar32 c) {
-    return UCPTRIE_FAST_GET(trie, UCPTRIE_8, c);
-}
-
-static inline uint16_t TrieFunc16(const UCPTrie *trie, UChar32 c) {
-    return UCPTRIE_FAST_GET(trie, UCPTRIE_16, c);
-}
-
 void RuleBasedBreakIterator::DictionaryCache::populateDictionary(int32_t startPos, int32_t endPos,
                                        int32_t firstRuleStatus, int32_t otherRuleStatus) {
     uint32_t dict_mask = ucptrie_getValueWidth(fBI->fData->fTrie) == UCPTRIE_VALUE_BITS_8 ?
