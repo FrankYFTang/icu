@@ -1337,7 +1337,7 @@ int32_t  RBBITableBuilder::getTableSize() const {
     numRows = fDStates->size();
     numCols = fRB->fSetBuilder->getNumCharCategories();
 
-    if (numRows < kStateThresholdFor8BitsTable) {
+    if (use8BitsForTable()) {
         rowSize = offsetof(RBBIStateTableRowS8, fNextState) + sizeof(int8_t)*numCols;
     } else {
         rowSize = offsetof(RBBIStateTableRowS16, fNextState) + sizeof(int16_t)*numCols;
@@ -1346,6 +1346,9 @@ int32_t  RBBITableBuilder::getTableSize() const {
     return size;
 }
 
+bool RBBITableBuilder::use8BitsForTable() const {
+    return fDStates->size() < kStateThresholdFor8BitsTable;
+}
 
 //-----------------------------------------------------------------------------
 //
@@ -1371,15 +1374,12 @@ void RBBITableBuilder::exportTable(void *where) {
     }
 
     table->fNumStates = fDStates->size();
-    bool use8Bits = table->fNumStates < kStateThresholdFor8BitsTable;
-    if (use8Bits) {
+    table->fFlags     = 0;
+    if (use8BitsForTable()) {
         table->fRowLen    = offsetof(RBBIStateTableRowS8, fNextState) + sizeof(uint8_t) * catCount;
+        table->fFlags  |= RBBI_8BITS_ROWS;
     } else {
         table->fRowLen    = offsetof(RBBIStateTableRowS16, fNextState) + sizeof(int16_t) * catCount;
-    }
-    table->fFlags     = 0;
-    if (use8Bits) {
-        table->fFlags  |= RBBI_8BITS_ROWS;
     }
     if (fRB->fLookAheadHardBreak) {
         table->fFlags  |= RBBI_LOOKAHEAD_HARD_BREAK;
@@ -1392,9 +1392,10 @@ void RBBITableBuilder::exportTable(void *where) {
     for (state=0; state<table->fNumStates; state++) {
         RBBIStateDescriptor *sd = (RBBIStateDescriptor *)fDStates->elementAt(state);
         RBBIStateTableRow   *row = (RBBIStateTableRow *)(table->fTableData + state*table->fRowLen);
-        if (use8Bits) {
+        if (use8BitsForTable()) {
             U_ASSERT (-128 < sd->fAccepting && sd->fAccepting < kStateThresholdFor8BitsTable);
             U_ASSERT (-128 < sd->fLookAhead && sd->fLookAhead < kStateThresholdFor8BitsTable);
+            U_ASSERT (-128 < sd->fTagsIdx && sd->fTagsIdx <= 127);
             row->s8.fAccepting = (int8_t)sd->fAccepting;
             row->s8.fLookAhead = (int8_t)sd->fLookAhead;
             row->s8.fTagIdx    = (int8_t)sd->fTagsIdx;
@@ -1413,7 +1414,6 @@ void RBBITableBuilder::exportTable(void *where) {
         }
     }
 }
-
 
 /**
  *   Synthesize a safe state table from the main state table.
@@ -1545,7 +1545,7 @@ int32_t  RBBITableBuilder::getSafeTableSize() const {
     numRows = fSafeTable->size();
     numCols = fRB->fSetBuilder->getNumCharCategories();
 
-    if (numRows < kStateThresholdFor8BitsTable) {
+    if (use8BitsForSafeTable()) {
         rowSize = offsetof(RBBIStateTableRowS8, fNextState) + sizeof(int8_t)*numCols;
     } else {
         rowSize = offsetof(RBBIStateTableRowS16, fNextState) + sizeof(int16_t)*numCols;
@@ -1554,6 +1554,9 @@ int32_t  RBBITableBuilder::getSafeTableSize() const {
     return size;
 }
 
+bool RBBITableBuilder::use8BitsForSafeTable() const {
+    return fSafeTable->size() < kStateThresholdFor8BitsTable;
+}
 
 //-----------------------------------------------------------------------------
 //
@@ -1579,27 +1582,25 @@ void RBBITableBuilder::exportSafeTable(void *where) {
     }
 
     table->fNumStates = fSafeTable->size();
-    bool use8Bits = table->fNumStates < kStateThresholdFor8BitsTable;
-    if (use8Bits) {
+    table->fFlags     = 0;
+    if (use8BitsForSafeTable()) {
         table->fRowLen    = offsetof(RBBIStateTableRowS8, fNextState) + sizeof(uint8_t) * catCount;
+        table->fFlags  |= RBBI_8BITS_ROWS;
     } else {
         table->fRowLen    = offsetof(RBBIStateTableRowS16, fNextState) + sizeof(int16_t) * catCount;
-    }
-    table->fFlags     = 0;
-    if (use8Bits) {
-        table->fFlags  |= RBBI_8BITS_ROWS;
     }
     table->fReserved  = 0;
 
     for (state=0; state<table->fNumStates; state++) {
         UnicodeString *rowString = (UnicodeString *)fSafeTable->elementAt(state);
         RBBIStateTableRow   *row = (RBBIStateTableRow *)(table->fTableData + state*table->fRowLen);
-        if (use8Bits) {
+        if (use8BitsForSafeTable()) {
             row->s8.fAccepting = 0;
             row->s8.fLookAhead = 0;
             row->s8.fTagIdx    = 0;
             row->s8.fReserved  = 0;
             for (col=0; col<catCount; col++) {
+                U_ASSERT(rowString->charAt(col) < 128);
                 row->s8.fNextState[col] = (uint8_t)rowString->charAt(col);
             }
         } else {

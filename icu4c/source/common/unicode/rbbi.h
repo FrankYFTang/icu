@@ -32,7 +32,7 @@
 #include "unicode/parseerr.h"
 #include "unicode/schriter.h"
 
-struct UCPTrie;    // TODO: undesirable, but Trie usage will be changing anyhow.
+struct UCPTrie;
 
 U_NAMESPACE_BEGIN
 
@@ -664,7 +664,8 @@ private:
     /*
      * Templatatized version of handleNext() and handleSafePrevious().
      *
-     * There will be exactly two instantiations, one each for 8 and 16 bit tables.
+     * There will be exactly four instantiations, two each for 8 and 16 bit tables,
+     * two each for 8 and 16 bit trie.
      * Having separate instantiations for the table types keeps conditional tests of
      * the table type out of the inner loops, at the expense of replicated code.
      *
