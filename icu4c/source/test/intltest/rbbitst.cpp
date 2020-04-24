@@ -129,6 +129,7 @@ void RBBITest::runIndexedTest( int32_t index, UBool exec, const char* &name, cha
     TESTCASE_AUTO(TestBug13692);
     TESTCASE_AUTO(TestDebugRules);
     TESTCASE_AUTO(TestDifferentTrieStateTableBits);
+    TESTCASE_AUTO(TestTable_8_16_Bits);
 
 #if U_ENABLE_TRACING
     TESTCASE_AUTO(TestTraceCreateCharacter);
@@ -4945,6 +4946,7 @@ void RBBITest::testTrieStateTable(int32_t numChar, UCPTrieValueWidth expectedTri
     }
 }
 
+
 void RBBITest::TestDifferentTrieStateTableBits() {
     testTrieStateTable(122, UCPTRIE_VALUE_BITS_8, RBBI_8BITS_ROWS);
     testTrieStateTable(123, UCPTRIE_VALUE_BITS_16, RBBI_8BITS_ROWS);
@@ -4994,6 +4996,68 @@ void RBBITest::TestDifferentTrieStateTableBits() {
         }
     }
 }
+
+// Test that both compact (8 bit) and full sized (16 bit) rbbi tables work, and
+// that there are no problems with rules at the size that transitions between the two.
+//
+// A rule that matches a literal string, like 'abcdefghij', will require one state and
+// one character class per character in the string. So we can make a rule to tickle the
+// boundaries by using literal strings of various lengths.
+//
+// For both the number of states and the number of character classes, the eight bit format
+// only has 7 bits available, allowing for 128 values. For both, a few values are reserved,
+// leaving 120 something available. This test runs the string over the range of 120 - 130,
+// which allows some margin for changes to the number of values reserved by the rule builder
+// without breaking the test.
+
+void RBBITest::TestTable_8_16_Bits() {
+
+    // testStr serves as both the source of the rule string (truncated to the desired length)
+    // and as test data to check matching behavior. A break rule consisting of the first 120
+    // characters of testStr will match the first 120 chars of the full-length testStr.
+    UnicodeString testStr;
+    for (UChar c=0x3000; c<0x3200; ++c) {
+        testStr.append(c);
+    }
+
+    const int32_t startLength = 120;   // The shortest rule string to test.
+    const int32_t endLength = 130;     // The longest rule string to test
+    const int32_t increment = this->quick ? endLength - startLength : 1;
+
+    for (int32_t ruleLen=startLength; ruleLen <= endLength; ruleLen += increment) {
+        UParseError parseError;
+        UErrorCode status = U_ZERO_ERROR;
+
+        UnicodeString ruleString{u"!!quoted_literals_only; '#';"};
+        ruleString.findAndReplace(UnicodeString(u"#"), UnicodeString(testStr, 0, ruleLen));
+        RuleBasedBreakIterator bi(ruleString, parseError, status);
+        if (!assertSuccess(WHERE, status)) {
+            errln(ruleString);
+            break;
+        }
+        // bi.dumpTables();
+
+        // Verify that the break iterator is functioning - that the first boundary found
+        // in testStr is at the length of the rule string.
+        bi.setText(testStr);
+        assertEquals(WHERE, ruleLen, bi.next());
+
+        // Verify that the range of rule lengths being tested cover the transations
+        // from 8 to 16 bit data.
+        bool has8BitRowData = bi.fData->fForwardTable->fFlags & RBBIStateTableFlags::RBBI_8BITS_ROWS;
+        bool has8BitsTrie = ucptrie_getValueWidth(bi.fData->fTrie) == UCPTRIE_VALUE_BITS_8;
+
+        if (ruleLen == startLength) {
+            assertEquals(WHERE, true, has8BitRowData);
+            assertEquals(WHERE, true, has8BitsTrie);
+        }
+        if (ruleLen == endLength) {
+            assertEquals(WHERE, false, has8BitRowData);
+            assertEquals(WHERE, false, has8BitsTrie);
+        }
+    }
+}
+
 
 #if U_ENABLE_TRACING
 static std::vector<std::string> gData;
