@@ -90,7 +90,7 @@ static UCalendarDateFields gDateFieldMapping[] = {
 };
 
 U_CAPI UCalendarDateFields U_EXPORT2
-udat_toCalendarDateField(UDateFormatField field) NO_SANITIZE_UNDEFINED {
+udat_toCalendarDateField(UDateFormatField field) UPRV_NO_SANITIZE_UNDEFINED {
   static_assert(UDAT_FIELD_COUNT == UPRV_LENGTHOF(gDateFieldMapping),
     "UDateFormatField and gDateFieldMapping should have the same number of entries and be kept in sync.");
   return (field >= UDAT_ERA_FIELD && field < UPRV_LENGTHOF(gDateFieldMapping))? gDateFieldMapping[field]: UCAL_FIELD_COUNT;

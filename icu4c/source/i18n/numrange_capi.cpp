@@ -97,12 +97,9 @@ unumrf_openForSkeletonWithCollapseAndIdentityFallback(
     }
     // Readonly-alias constructor (first argument is whether we are NUL-terminated)
     UnicodeString skeletonString(skeletonLen == -1, skeleton, skeletonLen);
-    UParseError temp_parse_error;
-    if (perror == nullptr) {
-        perror = &temp_parse_error;
-    }
+    UParseError tempParseError;
     impl->fFormatter = NumberRangeFormatter::withLocale(locale)
-        .numberFormatterBoth(NumberFormatter::forSkeleton(skeletonString, *perror, *ec))
+        .numberFormatterBoth(NumberFormatter::forSkeleton(skeletonString, (perror == nullptr) ? tempParseError : *perror, *ec))
         .collapse(collapse)
         .identityFallback(identityFallback);
     return impl->exportForC();

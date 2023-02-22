@@ -1717,7 +1717,7 @@ void Calendar::roll(EDateFields field, int32_t amount, UErrorCode& status)
     roll((UCalendarDateFields)field, amount, status);
 }
 
-void Calendar::roll(UCalendarDateFields field, int32_t amount, UErrorCode& status) NO_SANITIZE_UNDEFINED {
+void Calendar::roll(UCalendarDateFields field, int32_t amount, UErrorCode& status) UPRV_NO_SANITIZE_UNDEFINED {
     if (amount == 0) {
         return; // Nothing to do
     }
@@ -2457,7 +2457,7 @@ Calendar::getSkippedWallTimeOption(void) const
 // -------------------------------------
 
 void
-Calendar::setFirstDayOfWeek(UCalendarDaysOfWeek value) NO_SANITIZE_UNDEFINED {
+Calendar::setFirstDayOfWeek(UCalendarDaysOfWeek value) UPRV_NO_SANITIZE_UNDEFINED {
     if (fFirstDayOfWeek != value &&
         value >= UCAL_SUNDAY && value <= UCAL_SATURDAY) {
             fFirstDayOfWeek = value;

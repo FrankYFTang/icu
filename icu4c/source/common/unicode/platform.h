@@ -462,9 +462,9 @@
 
 
 #if defined(__clang__)
-#define NO_SANITIZE_UNDEFINED __attribute__((no_sanitize("undefined")))
+#define UPRV_NO_SANITIZE_UNDEFINED __attribute__((no_sanitize("undefined")))
 #else
-#define NO_SANITIZE_UNDEFINED
+#define UPRV_NO_SANITIZE_UNDEFINED
 #endif
 
 /**

@@ -189,7 +189,7 @@ RuleBasedBreakIterator::RuleBasedBreakIterator( const UnicodeString  &rules,
 //                           Used when creating a RuleBasedBreakIterator from a set
 //                           of rules.
 //-------------------------------------------------------------------------------
-RuleBasedBreakIterator::RuleBasedBreakIterator() NO_SANITIZE_UNDEFINED 
+RuleBasedBreakIterator::RuleBasedBreakIterator() UPRV_NO_SANITIZE_UNDEFINED 
  : RuleBasedBreakIterator(fErrorCode)
 {
 }
