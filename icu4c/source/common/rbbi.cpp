@@ -63,7 +63,7 @@ UOBJECT_DEFINE_RTTI_IMPLEMENTATION(RuleBasedBreakIterator)
  * tables object that is passed in as a parameter.
  */
 RuleBasedBreakIterator::RuleBasedBreakIterator(RBBIDataHeader* data, UErrorCode &status)
- : RuleBasedBreakIterator(status)
+ : RuleBasedBreakIterator(&status)
 {
     fData = new RBBIDataWrapper(data, status); // status checked in constructor
     if (U_FAILURE(status)) {return;}
@@ -101,7 +101,7 @@ RuleBasedBreakIterator::RuleBasedBreakIterator(UDataMemory* udm, UBool isPhraseB
 RuleBasedBreakIterator::RuleBasedBreakIterator(const uint8_t *compiledRules,
                        uint32_t       ruleLength,
                        UErrorCode     &status)
- : RuleBasedBreakIterator(status)
+ : RuleBasedBreakIterator(&status)
 {
     if (U_FAILURE(status)) {
         return;
@@ -139,7 +139,7 @@ RuleBasedBreakIterator::RuleBasedBreakIterator(const uint8_t *compiledRules,
 //
 //-------------------------------------------------------------------------------
 RuleBasedBreakIterator::RuleBasedBreakIterator(UDataMemory* udm, UErrorCode &status)
- : RuleBasedBreakIterator(status)
+ : RuleBasedBreakIterator(&status)
 {
     fData = new RBBIDataWrapper(udm, status); // status checked in constructor
     if (U_FAILURE(status)) {return;}
@@ -167,7 +167,7 @@ RuleBasedBreakIterator::RuleBasedBreakIterator(UDataMemory* udm, UErrorCode &sta
 RuleBasedBreakIterator::RuleBasedBreakIterator( const UnicodeString  &rules,
                                                 UParseError          &parseError,
                                                 UErrorCode           &status)
- : RuleBasedBreakIterator(status)
+ : RuleBasedBreakIterator(&status)
 {
     if (U_FAILURE(status)) {return;}
     RuleBasedBreakIterator *bi = (RuleBasedBreakIterator *)
@@ -189,8 +189,8 @@ RuleBasedBreakIterator::RuleBasedBreakIterator( const UnicodeString  &rules,
 //                           Used when creating a RuleBasedBreakIterator from a set
 //                           of rules.
 //-------------------------------------------------------------------------------
-RuleBasedBreakIterator::RuleBasedBreakIterator() UPRV_NO_SANITIZE_UNDEFINED 
- : RuleBasedBreakIterator(fErrorCode)
+RuleBasedBreakIterator::RuleBasedBreakIterator()
+ : RuleBasedBreakIterator(nullptr)
 {
 }
 
@@ -198,12 +198,16 @@ RuleBasedBreakIterator::RuleBasedBreakIterator() UPRV_NO_SANITIZE_UNDEFINED
  * Simple Constructor with an error code.
  * Handles common initialization for all other constructors.
  */
-RuleBasedBreakIterator::RuleBasedBreakIterator(UErrorCode &status) {
-    utext_openUChars(&fText, nullptr, 0, &status);
-    LocalPointer<DictionaryCache> lpDictionaryCache(new DictionaryCache(this, status), status);
-    LocalPointer<BreakCache> lpBreakCache(new BreakCache(this, status), status);
-    if (U_FAILURE(status)) {
-        fErrorCode = status;
+RuleBasedBreakIterator::RuleBasedBreakIterator(UErrorCode *status) {
+    UErrorCode ec = U_ZERO_ERROR;
+    if (status == nullptr) {
+        status = &ec;
+    }
+    utext_openUChars(&fText, nullptr, 0, status);
+    LocalPointer<DictionaryCache> lpDictionaryCache(new DictionaryCache(this, *status), *status);
+    LocalPointer<BreakCache> lpBreakCache(new BreakCache(this, *status), *status);
+    if (U_FAILURE(*status)) {
+        fErrorCode = *status;
         return;
     }
     fDictionaryCache = lpDictionaryCache.orphan();
