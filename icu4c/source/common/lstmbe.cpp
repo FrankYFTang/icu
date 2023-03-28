@@ -4,9 +4,14 @@
 #include <complex>
 #include <utility>
 
+#if !UCONFIG_NO_BREAK_ITERATION
+
+#define CL_TARGET_OPENCL_VERSION 100
+#define CL_USE_DEPRECATED_OPENCL_1_2_APIS
+#include <CL/opencl.h>
+
 #include "unicode/utypes.h"
 
-#if !UCONFIG_NO_BREAK_ITERATION
 
 #include "brkeng.h"
 #include "charstr.h"
@@ -18,6 +23,8 @@
 #include "uresimp.h"
 #include "uvectr32.h"
 #include "uvector.h"
+#include "umutex.h"
+#include "ucln_cmn.h"
 
 #include "unicode/brkiter.h"
 #include "unicode/resbund.h"
@@ -25,8 +32,188 @@
 #include "unicode/uniset.h"
 #include "unicode/ustring.h"
 #include "unicode/utf.h"
+#include "unicode/uclean.h"
 
 U_NAMESPACE_BEGIN
+
+
+class OpenCL : public UMemory {
+public:
+    OpenCL() {
+        int err;
+        clGetDeviceIDs(NULL, CL_DEVICE_TYPE_GPU, 1, &device_id, NULL);
+        context = clCreateContext(0, 1, &device_id, NULL, NULL, &err);
+        U_ASSERT(err == 0);
+
+        const char *KernelSource =
+  "__kernel void maxIndex(__global int* out, __global float* in, int len, const int group) { \n" \
+  "   int i = get_global_id(0); \n" \
+  "   if (i >= len) return; \n" \
+  "   int maxIdx = 0; \n" \
+  "   int offset = i * group; \n" \
+  "   float max = in[offset]; \n" \
+  "   for (int j = 1; j < group; j++) { \n" \
+  "      if(in[offset + j] > max) { \n" \
+  "        max = in[offset + j];\n" \
+  "        maxIdx = j;\n" \
+  "      } \n" \
+  "   } \n" \
+  "   out[i] = maxIdx; \n" \
+  "} \n" \
+  "__kernel void clear(__global float* a, const int len, const int offset) { \n" \
+  "   int i = get_global_id(0); \n" \
+  "   if (i >= len) return; \n" \
+  "   a[i+offset] = 0; \n" \
+  "} \n" \
+  "__kernel void print(__global float* a, const int len, const int offset) { \n" \
+  "   int i = get_global_id(0); \n" \
+  "   if (i >= len) return; \n" \
+  "   if (i == 0) { \n" \
+  "     printf(\"\\nMAT:\"); \n" \
+  "     for (int j = 0; j < len; j++) { \n" \
+  "       printf(\"%f \", a[j + offset]); \n" \
+  "     } \n" \
+  "     printf(\"\\n\"); \n" \
+  "   } \n" \
+  "} \n" \
+  "__kernel void ident(__global float* a, const int len, const int offset) { \n" \
+  "   int i = get_global_id(0); \n" \
+  "   if (i >= len) return; \n" \
+  "   a[i + offset] = i; \n" \
+  "} \n" \
+  "__kernel void add(__global float* out, __global float* a, __global float* b, \n" \
+  "                  const int len, const int offset) { \n" \
+  "   int i = get_global_id(0); \n" \
+  "   if (i >= len) return; \n" \
+  "   out[i+offset] = a[i] + b[i];\n" \
+  "} \n" \
+  "__kernel void add3(__global float* out, __global float* a, __global float* b, \n" \
+  "                   __global float* c, const int len) { \n" \
+  "   int i = get_global_id(0); \n" \
+  "   if (i >= len) return; \n" \
+  "   out[i] = a[i] + b[i] + c[i];\n" \
+  "} \n" \
+  "__kernel void mul1d2d(__global float* out, __global float* a, __global float* b, \n" \
+  "                      const int n, const int m, const int aOffset ) { \n" \
+  "   int i = get_global_id(0); \n" \
+  "   if (i >= n * m) return; \n" \
+  "   out[i] = a[i / m  + aOffset] * b[i];\n" \
+  "} \n" \
+  "__kernel void offsetAdd(__global float* data, const int length, const int aOffset, const int bOffset) { \n" \
+  "   int i = get_global_id(0); \n" \
+  "   if (i >= length) return; \n" \
+  "   data[ i + aOffset] += data[i + bOffset];\n" \
+  "} \n" \
+  "__kernel void tanhOrSigmoid( __global float* ifco, const int length, const int hunits) { \n" \
+  "   int i = get_global_id(0); \n" \
+  "   if (i >= length) return; \n" \
+  "   if (i < 2 * hunits || i >= 3 * hunits) { \n" \
+  "      ifco[i] = 1.0f/(1.0f + exp(-ifco[i])); \n" \
+  "   } else { \n" \
+  "      ifco[i] = tanh(ifco[i]); \n" \
+  "   } \n" \
+  "} \n" \
+  "__kernel void updateCandH(__global float* ifco, __global float* c, __global float* h, \n" \
+  "                       const int hunits, const int iOffset, const int fOffset, \n" \
+  "                       const int cOffset, const int oOffset) { \n" \
+  "   int i = get_global_id(0); \n" \
+  "   if (i >= hunits) return; \n" \
+  "   c[i] = c[i] * ifco[i + fOffset] + ifco[i + iOffset] * ifco[i + cOffset];\n" \
+  "   h[i] = tanh(c[i]) * ifco[i + oOffset] ;\n" \
+  "} \n" \
+  "__kernel void copy(__global float* dest, __global float* src, \n" \
+  "                       const int length, const int destOffset, const int srcOffset) { \n" \
+  "   int i = get_global_id(0); \n" \
+  "   if (i >= length) return; \n" \
+  "   dest[i + destOffset] = src[i + srcOffset]; \n" \
+  "}";
+
+        cl_program program = clCreateProgramWithSource(context, 1, (const char **) & KernelSource, NULL, &err);
+        U_ASSERT(err == 0);
+        err = clBuildProgram(program, 0, NULL, NULL, NULL, NULL);
+        U_ASSERT(err == 0);
+        clear = clCreateKernel(program, "clear", &err);
+        U_ASSERT(err == 0);
+        ident = clCreateKernel(program, "ident", &err);
+        U_ASSERT(err == 0);
+        print = clCreateKernel(program, "print", &err);
+        U_ASSERT(err == 0);
+        maxIndex = clCreateKernel(program, "maxIndex", &err);
+        U_ASSERT(err == 0);
+        add = clCreateKernel(program, "add", &err);
+        U_ASSERT(err == 0);
+        add3 = clCreateKernel(program, "add3", &err);
+        U_ASSERT(err == 0);
+        mul1d2d = clCreateKernel(program, "mul1d2d", &err);
+        U_ASSERT(err == 0);
+        offsetAdd = clCreateKernel(program, "offsetAdd", &err);
+        U_ASSERT(err == 0);
+        tanhOrSigmoid = clCreateKernel(program, "tanhOrSigmoid", &err);
+        U_ASSERT(err == 0);
+        updateCandH = clCreateKernel(program, "updateCandH", &err);
+        U_ASSERT(err == 0);
+        copy = clCreateKernel(program, "copy", &err);
+        U_ASSERT(err == 0);
+    }
+    ~OpenCL() {
+        clReleaseKernel(print);
+        clReleaseKernel(ident);
+        clReleaseKernel(clear);
+        clReleaseKernel(add3);
+        clReleaseKernel(add);
+        clReleaseKernel(maxIndex);
+        clReleaseKernel(mul1d2d);
+        clReleaseKernel(offsetAdd);
+        clReleaseKernel(updateCandH);
+        clReleaseKernel(tanhOrSigmoid);
+        clReleaseKernel(copy);
+        clReleaseContext(context);
+    }
+    cl_context getContext() { return context; }
+    cl_device_id getDeviceID() { return device_id; }
+    cl_kernel getPrint() { return print; }
+    cl_kernel getIdent() { return ident; }
+    cl_kernel getClear() { return clear; }
+    cl_kernel getAdd() { return add; }
+    cl_kernel getAdd3() { return add3; }
+    cl_kernel getMaxIndex() { return maxIndex; }
+    cl_kernel getMul1d2d() { return mul1d2d; }
+    cl_kernel getOffsetAdd() { return offsetAdd; }
+    cl_kernel getTanhOrSigmoid() { return tanhOrSigmoid; }
+    cl_kernel getUpdateCH() { return updateCandH; }
+    cl_kernel getCopy() { return copy; }
+
+private:
+    cl_device_id device_id;
+    cl_context context;
+    cl_kernel print;
+    cl_kernel ident;
+    cl_kernel clear;
+    cl_kernel add;
+    cl_kernel add3;
+    cl_kernel maxIndex;
+    cl_kernel mul1d2d;
+    cl_kernel offsetAdd;
+    cl_kernel updateCandH;
+    cl_kernel tanhOrSigmoid;
+    cl_kernel copy;
+};
+
+static UInitOnce gOpenCLInitOnce {};
+static OpenCL* gOpenCL = nullptr;
+
+static UBool U_CALLCONV opencl_cleanup() {
+    gOpenCLInitOnce.reset();
+    delete gOpenCL;
+    return true;
+}
+
+static void U_CALLCONV
+initOpenCL(UErrorCode&)
+{
+    gOpenCL = new OpenCL();
+    ucln_common_registerCleanup(UCLN_COMMON_LSTM, opencl_cleanup);
+}
 
 // Uncomment the following #define to debug.
 // #define LSTM_DEBUG 1
@@ -40,6 +227,8 @@ public:
     virtual ~ReadArray1D();
     virtual int32_t d1() const = 0;
     virtual float get(int32_t i) const = 0;
+    virtual const float* getData() const = 0;
+    virtual size_t dataSize() const = 0;
 
 #ifdef LSTM_DEBUG
     void print() const {
@@ -66,6 +255,8 @@ public:
     virtual int32_t d1() const = 0;
     virtual int32_t d2() const = 0;
     virtual float get(int32_t i, int32_t j) const = 0;
+    virtual const float* getData() const = 0;
+    virtual size_t dataSize() const = 0;
 };
 
 ReadArray2D::~ReadArray2D()
@@ -98,6 +289,8 @@ public:
         U_ASSERT(i < d1_);
         return data_[i];
     }
+    virtual const float* getData() const override { return data_; }
+    virtual size_t dataSize() const override { return sizeof(float) * d1(); }
 
 private:
     const float* data_;
@@ -138,6 +331,8 @@ public:
         U_ASSERT(j < d2_);
         return data_[i * d2_ + j];
     }
+    virtual const float* getData() const override { return data_; }
+    virtual size_t dataSize() const override { return sizeof(float) * d1() * d2(); }
 
     // Expose the ith row as a ConstArray1D
     inline ConstArray1D row(int32_t i) const {
@@ -187,6 +382,8 @@ public:
         U_ASSERT(i < d1_);
         return data_[i];
     }
+    virtual const float* getData() const override { return data_; }
+    virtual size_t dataSize() const override { return sizeof(float) * d1(); }
 
     // Return the index which point to the max data in the array.
     inline int32_t maxIndex() const {
@@ -252,9 +449,7 @@ public:
     // Assign the values of another array of the same size into this one.
     inline Array1D& assign(const ReadArray1D& a) {
         U_ASSERT(a.d1() == d1());
-        for (int32_t i = 0; i < d1(); i++) {
-            data_[i] = a.get(i);
-        }
+        uprv_memcpy((void*)getData(), (void*)a.getData(), d1() * sizeof(float));
         return *this;
     }
 
@@ -330,6 +525,8 @@ public:
         uprv_memset(data_, 0, d1_ * d2_ * sizeof(float));
         return *this;
     }
+    virtual const float* getData() const override { return data_; }
+    virtual size_t dataSize() const override { return sizeof(float) * d1() * d2(); }
 
 private:
     void* memory_;
@@ -606,26 +803,530 @@ void GraphemeClusterVectorizer::vectorize(
 // input/output value but could avoid unnecessary memory alloc/free if passing
 // in.
 void compute(
-    int32_t hunits,
     const ReadArray2D& W, const ReadArray2D& U, const ReadArray1D& b,
-    const ReadArray1D& x, Array1D& h, Array1D& c,
+    const ConstArray2D& E, int32_t row,
+    Array1D& h, Array1D& c,
     Array1D& ifco)
 {
+    int32_t hunits = U.d1();
+    ConstArray1D x = E.row(row);
     // ifco = x * W + h * U + b
     ifco.assign(b)
         .addDotProduct(x, W)
         .addDotProduct(h, U);
 
-    ifco.slice(0*hunits, hunits).sigmoid();  // i: sigmod
+#if 0
+    printf("\nIFCO %d\n", hunits);
+    printf("I:\n");
+    for (int32_t i = 0; i < hunits; i++) {
+        printf("%f ", ifco.get(i));
+    }
+    printf("\nF:\n");
+    for (int32_t i = 0; i < hunits; i++) {
+        printf("%f ", ifco.get(i+hunits));
+    }
+    printf("\nC:\n");
+    for (int32_t i = 0; i < hunits; i++) {
+        printf("%f ", ifco.get(i+hunits*2));
+    }
+    printf("\nO:\n");
+    for (int32_t i = 0; i < hunits; i++) {
+        printf("%f ", ifco.get(i+hunits*3));
+    }
+#endif
+
+    ifco.slice(0*hunits, hunits).sigmoid();  // i: sigmoid
     ifco.slice(1*hunits, hunits).sigmoid(); // f: sigmoid
     ifco.slice(2*hunits, hunits).tanh(); // c_: tanh
-    ifco.slice(3*hunits, hunits).sigmoid(); // o: sigmod
+    ifco.slice(3*hunits, hunits).sigmoid(); // o: sigmoid
 
     c.hadamardProduct(ifco.slice(hunits, hunits))
         .addHadamardProduct(ifco.slice(0, hunits), ifco.slice(2*hunits, hunits));
 
     h.tanh(c)
         .hadamardProduct(ifco.slice(3*hunits, hunits));
+
+    /*
+    printf("\nc:\n");
+    for (int32_t i = 0; i < c.d1(); i++) {
+        printf("%f ", c.get(i));
+    }
+    printf("\nh:\n");
+    for (int32_t i = 0; i < h.d1(); i++) {
+        printf("%f ", h.get(i));
+    }
+    */
+}
+
+void backwardLSTM(const LSTMData* fData, int32_t row, Array1D& h, Array1D& c, Array1D& ifco) {
+    compute(fData->fBackwardW, fData->fBackwardU, fData->fBackwardB,
+            fData->fEmbedding, row,
+            h, c, ifco);
+}
+
+void forwardLSTM(const LSTMData* fData, int32_t row, Array1D& h, Array1D& c, Array1D& ifco) {
+    compute(fData->fForwardW, fData->fForwardU, fData->fForwardB,
+            fData->fEmbedding, row,
+            h, c, ifco);
+}
+
+void bidirectionalLSTMCPU(const LSTMData* fData, int32_t len, int32_t* input, int32_t* output, UErrorCode& status) {
+    double start = uprv_getUTCtime();
+    int32_t hunits = fData->fForwardU.d1();
+    Array2D h(len, hunits, status);
+    Array1D c(hunits, status);
+    Array1D ifco(4 * hunits, status);
+    Array1D logp(4, status);
+    Array1D both(2 * hunits, status);
+    Array1D f = both.slice(0, hunits);  // point to first half of data in both.
+    Array1D b = both.slice(hunits, hunits);  // point to second half of data in both.
+
+    for (int32_t i = len - 1; i >= 0; i--) {
+        backwardLSTM(fData, input[i], b, c, ifco);
+        h.row(i).assign(b);
+    }
+
+#if 0
+    printf("CPU After Backward Scan h:\n");
+    for (int i = 0; i < h.d1(); i++) {
+      printf("%d: [", i);
+      for (int j = 0; j < h.d2(); j++) {
+        printf("%f ", h.get(i, j));
+      }
+      printf("]\n");
+    }
+#endif
+
+    c.clear();
+
+    // The following iteration merge the forward LSTM and the output layer
+    // together.
+    for (int32_t i = 0; i < len; i++) {
+//        printf("Forward %d = row %d\n", i, input[i]);
+        // Forward LSTM
+        // Calculate the result into f, which point to the data in the first half
+        // of both.
+        forwardLSTM(fData, input[i], f, c, ifco);
+#if 0
+    printf("\ncpu ifco:\n");
+    for (int i = 0; i < ifco.d1(); i++) {
+        printf("%f ", ifco.get(i));
+    }
+    printf("\n");
+#endif
+
+        // assign the data from hBackward.row(i) to second half of both.
+        b.assign(h.row(i));
+
+#if 0
+    printf("\ncpu both:\n");
+    for (int i = 0; i < both.d1(); i++) {
+        printf("%f ", both.get(i));
+    }
+    printf("\n");
+    printf("\ncpu Wo:\n");
+    for (int i = 0; i < fData->fOutputW.d1(); i++) {
+        for (int j = 0; j < fData->fOutputW.d2(); j++) {
+            printf("%f ", fData->fOutputW.get(i, j));
+        }
+    }
+    printf("\ncpu Bo:\n");
+    for (int i = 0; i < fData->fOutputB.d1(); i++) {
+        printf("%f ", fData->fOutputB.get(i));
+    }
+    printf("\n");
+#endif
+        // logp = fData->fOutputB + both * fData->fOutputW
+        logp.assign(fData->fOutputB).addDotProduct(both, fData->fOutputW);
+
+        // current = argmax(logp)
+        output[i] = logp.maxIndex();
+    }
+    double end = uprv_getUTCtime();
+    printf("CPU %f\n", end-start);
+}
+
+cl_mem create2DData(cl_context cx, cl_command_queue q, const ConstArray2D& d, int& err) {
+    cl_mem mem = clCreateBuffer(cx, CL_MEM_READ_ONLY, d.dataSize(), NULL, NULL);
+    err = clEnqueueWriteBuffer(q, mem, CL_TRUE, 0, d.dataSize(), d.getData(), 0, NULL, NULL);
+    U_ASSERT(err == 0);
+    return mem;
+}
+cl_mem create1DData(cl_context cx, cl_command_queue q, const ConstArray1D& d, int& err) {
+    cl_mem mem = clCreateBuffer(cx, CL_MEM_READ_ONLY, d.dataSize(), NULL, NULL);
+    err = clEnqueueWriteBuffer(q, mem, CL_TRUE, 0, d.dataSize(), d.getData(), 0, NULL, NULL);
+    return mem;
+}
+cl_mem createBuffer(cl_context cx, int32_t len) {
+    return clCreateBuffer(cx, CL_MEM_READ_WRITE, sizeof(float) * len, NULL, NULL);
+}
+cl_mem createIntBuffer(cl_context cx, int32_t len) {
+    return clCreateBuffer(cx, CL_MEM_READ_WRITE, sizeof(int) * len, NULL, NULL);
+}
+
+size_t round_work_group_size(size_t items) {
+  const size_t kMinWorkGroupSize = 512;
+  size_t global = kMinWorkGroupSize;
+  if (items > kMinWorkGroupSize) {
+      // round the multiple of kMinWorkGroupSize
+      global = items - (items % kMinWorkGroupSize) + ((items % kMinWorkGroupSize == 0) ? 0 : kMinWorkGroupSize);
+  }
+  return global;
+}
+
+void add(cl_device_id id, cl_command_queue q, cl_mem out, cl_mem a, cl_mem b, int len, int offset) {
+    size_t local;
+    size_t global = round_work_group_size(len);
+    cl_kernel k = gOpenCL->getAdd();
+    int err = clSetKernelArg(k, 0, sizeof(cl_mem), &out);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 1, sizeof(cl_mem), &a);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 2, sizeof(cl_mem), &b);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 3, sizeof(int), &len);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 4, sizeof(int), &offset);
+    U_ASSERT(err == 0);
+    err = clGetKernelWorkGroupInfo(k, id, CL_KERNEL_WORK_GROUP_SIZE, sizeof(local), &local, NULL);
+    U_ASSERT(err == 0);
+    err = clEnqueueNDRangeKernel(q, k, 1, NULL, &global, &local, 0, NULL, NULL);
+    U_ASSERT(err == 0);
+}
+void maxIndex(cl_device_id id, cl_command_queue q, cl_mem out, cl_mem in, int len, int group) {
+    size_t local;
+    size_t global = round_work_group_size(len);
+    cl_kernel k = gOpenCL->getMaxIndex();
+    int err = clSetKernelArg(k, 0, sizeof(cl_mem), &out);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 1, sizeof(cl_mem), &in);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 2, sizeof(int), &len);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 3, sizeof(int), &group);
+    U_ASSERT(err == 0);
+    err = clGetKernelWorkGroupInfo(k, id, CL_KERNEL_WORK_GROUP_SIZE, sizeof(local), &local, NULL);
+    U_ASSERT(err == 0);
+    err = clEnqueueNDRangeKernel(q, k, 1, NULL, &global, &local, 0, NULL, NULL);
+    U_ASSERT(err == 0);
+}
+void add3(cl_device_id id, cl_command_queue q, cl_mem out, cl_mem a, cl_mem b, cl_mem c, int len) {
+    size_t local;
+    size_t global = round_work_group_size(len);
+    cl_kernel k = gOpenCL->getAdd3();
+    int err = clSetKernelArg(k, 0, sizeof(cl_mem), &out);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 1, sizeof(cl_mem), &a);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 2, sizeof(cl_mem), &b);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 3, sizeof(cl_mem), &c);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 4, sizeof(int), &len);
+    U_ASSERT(err == 0);
+    err = clGetKernelWorkGroupInfo(k, id, CL_KERNEL_WORK_GROUP_SIZE, sizeof(local), &local, NULL);
+    U_ASSERT(err == 0);
+    err = clEnqueueNDRangeKernel(q, k, 1, NULL, &global, &local, 0, NULL, NULL);
+    U_ASSERT(err == 0);
+}
+void mul1d2d(cl_device_id id, cl_command_queue q, cl_mem out, cl_mem a, cl_mem b,
+             int n, int m, int aOffset) {
+    size_t local;
+    size_t global = round_work_group_size(n*m);
+    cl_kernel k = gOpenCL->getMul1d2d();
+    int err = clSetKernelArg(k, 0, sizeof(cl_mem), &out);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 1, sizeof(cl_mem), &a);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 2, sizeof(cl_mem), &b);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 3, sizeof(int), &n);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 4, sizeof(int), &m);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 5, sizeof(int), &aOffset);
+    U_ASSERT(err == 0);
+    err = clGetKernelWorkGroupInfo(k, id, CL_KERNEL_WORK_GROUP_SIZE, sizeof(local), &local, NULL);
+    U_ASSERT(err == 0);
+    err = clEnqueueNDRangeKernel(q, k, 1, NULL, &global, &local, 0, NULL, NULL);
+    U_ASSERT(err == 0);
+}
+void print(cl_device_id id, cl_command_queue q, cl_mem a, int len, int offset) {
+    size_t local;
+    size_t global = round_work_group_size(len);
+    cl_kernel k = gOpenCL->getPrint();
+    int err = clSetKernelArg(k, 0, sizeof(cl_mem), &a);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 1, sizeof(int), &len);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 2, sizeof(int), &offset);
+    U_ASSERT(err == 0);
+    err = clGetKernelWorkGroupInfo(k, id, CL_KERNEL_WORK_GROUP_SIZE, sizeof(local), &local, NULL);
+    U_ASSERT(err == 0);
+    err = clEnqueueNDRangeKernel(q, k, 1, NULL, &global, &local, 0, NULL, NULL);
+    U_ASSERT(err == 0);
+}
+
+void ident(cl_device_id id, cl_command_queue q, cl_mem a, int len, int offset) {
+    size_t local;
+    size_t global = round_work_group_size(len);
+    cl_kernel k = gOpenCL->getIdent();
+    int err = clSetKernelArg(k, 0, sizeof(cl_mem), &a);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 1, sizeof(int), &len);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 2, sizeof(int), &offset);
+    U_ASSERT(err == 0);
+    err = clGetKernelWorkGroupInfo(k, id, CL_KERNEL_WORK_GROUP_SIZE, sizeof(local), &local, NULL);
+    U_ASSERT(err == 0);
+    err = clEnqueueNDRangeKernel(q, k, 1, NULL, &global, &local, 0, NULL, NULL);
+    U_ASSERT(err == 0);
+}
+void clear(cl_device_id id, cl_command_queue q, cl_mem a, int len, int offset) {
+    size_t local;
+    size_t global = round_work_group_size(len);
+    cl_kernel k = gOpenCL->getClear();
+    int err = clSetKernelArg(k, 0, sizeof(cl_mem), &a);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 1, sizeof(int), &len);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 2, sizeof(int), &offset);
+    U_ASSERT(err == 0);
+    err = clGetKernelWorkGroupInfo(k, id, CL_KERNEL_WORK_GROUP_SIZE, sizeof(local), &local, NULL);
+    U_ASSERT(err == 0);
+    err = clEnqueueNDRangeKernel(q, k, 1, NULL, &global, &local, 0, NULL, NULL);
+    U_ASSERT(err == 0);
+}
+
+void offsetAdd(cl_device_id id, cl_command_queue q, cl_mem data, int length, int offsetA, int offsetB) {
+    size_t local;
+    cl_kernel k = gOpenCL->getOffsetAdd();
+    size_t global = round_work_group_size(length);
+    int err = clSetKernelArg(k, 0, sizeof(cl_mem), &data);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 1, sizeof(int), &length);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 2, sizeof(int), &offsetA);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 3, sizeof(int), &offsetB);
+    U_ASSERT(err == 0);
+    err = clGetKernelWorkGroupInfo(k, id, CL_KERNEL_WORK_GROUP_SIZE, sizeof(local), &local, NULL);
+    U_ASSERT(err == 0);
+    err = clEnqueueNDRangeKernel(q, k, 1, NULL, &global, &local, 0, NULL, NULL);
+    U_ASSERT(err == 0);
+}
+
+void mul(cl_device_id id, cl_command_queue q, cl_mem c, cl_mem a, cl_mem b,
+         int d1, int d2, int aOffset) {
+    mul1d2d(id, q, c, a, b, d1, d2, aOffset);
+    int n = d1;
+    while (n != 1) {                 // Run ceil(log(n)) times
+        int aStart = 0;
+        int bStart = ((n+1)/2) * d2; // ceil(n/2) * d2
+        offsetAdd(id, q, c, (n/2) * d2 , aStart, bStart);
+        n = (n+1)/2;  // n = ceil(n/2)
+    }
+}
+
+void tanhOrSigmoid(cl_device_id id, cl_context cx, cl_command_queue q, cl_mem ifco, int length, int hunits) {
+    size_t local;
+    size_t global = round_work_group_size(length);
+    cl_kernel k = gOpenCL->getTanhOrSigmoid();
+    int err = clSetKernelArg(k, 0, sizeof(cl_mem), &ifco);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 1, sizeof(int), &length);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 2, sizeof(int), &hunits);
+    U_ASSERT(err == 0);
+    err = clGetKernelWorkGroupInfo(k, id, CL_KERNEL_WORK_GROUP_SIZE, sizeof(local), &local, NULL);
+    U_ASSERT(err == 0);
+    err = clEnqueueNDRangeKernel(q, k, 1, NULL, &global, &local, 0, NULL, NULL);
+    U_ASSERT(err == 0);
+}
+
+void updateCandH(cl_device_id id, cl_context cx, cl_command_queue q, cl_mem ifco, cl_mem c, cl_mem h, int hunits) {
+    size_t local;
+    size_t global = round_work_group_size(hunits);
+    const int iOffset = 0;
+    const int fOffset = hunits;
+    const int cOffset = 2 * hunits;
+    const int oOffset = 3 * hunits;
+    cl_kernel k = gOpenCL->getUpdateCH();
+    int err = clSetKernelArg(k, 0, sizeof(cl_mem), &ifco);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 1, sizeof(cl_mem), &c);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 2, sizeof(cl_mem), &h);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 3, sizeof(int), &hunits);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 4, sizeof(int), &iOffset);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 5, sizeof(int), &fOffset);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 6, sizeof(int), &cOffset);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 7, sizeof(int), &oOffset);
+    U_ASSERT(err == 0);
+    err = clGetKernelWorkGroupInfo(k, id, CL_KERNEL_WORK_GROUP_SIZE, sizeof(local), &local, NULL);
+    U_ASSERT(err == 0);
+    err = clEnqueueNDRangeKernel(q, k, 1, NULL, &global, &local, 0, NULL, NULL);
+    U_ASSERT(err == 0);
+}
+
+void Output(cl_device_id id, cl_context cx, cl_command_queue q,
+            cl_mem out, cl_mem both, cl_mem W, cl_mem B,
+            int hunits, int offset) {
+    // The bothW should be in (1, 4) dimension, but the intermediate step
+    // need dimension of (2*hunits, 4) so we allocate that but only take
+    // the first (1, 4) from the result.
+    cl_mem bothW = createBuffer(cx, 8*hunits);
+    mul(id, q, bothW, both, W, 2*hunits, 4, 0);
+    // out = B + both x W
+    add(id, q, out, B, bothW, 4, offset);
+    clReleaseMemObject(bothW);
+}
+
+void LSTMIter(cl_device_id id, cl_context cx, cl_command_queue q,
+              cl_mem W, cl_mem U, cl_mem B, cl_mem E, cl_mem h, cl_mem ifco, cl_mem c,
+              int hunits, int embeddings, int row) {
+    int h4 = 4 * hunits;
+    // The xW should be in (1, 4hunits) dimension, but the intermediate step
+    // need dimension of (embeddings, 4hunits) so we allocate that but only take
+    // the first (1, 4hunts) from the result.
+    cl_mem xW = createBuffer(cx, embeddings * h4);
+    mul(id, q, xW, E, W, embeddings, h4, row*embeddings);
+
+    // The xW should be in (1, 4hunits) dimension, but the intermediate step
+    // need dimension of (h, 4hunits) so we allocate that but only take
+    // the first (1, 4hunts) from the result.
+    cl_mem hU = createBuffer(cx, hunits * h4);
+    mul(id, q, hU, h, U, hunits, h4, 0);
+    add3(id, q, ifco, B, xW, hU, h4);
+    clReleaseMemObject(hU);
+    clReleaseMemObject(xW);
+    tanhOrSigmoid(id, cx, q, ifco, 4*hunits, hunits);
+    updateCandH(id, cx, q, ifco, c, h, hunits);
+}
+
+void copy(cl_device_id id, cl_command_queue q, cl_mem dest, cl_mem src, int length, int destOffset, int srcOffset) {
+    size_t local;
+    size_t global = 4096;
+    cl_kernel k = gOpenCL->getCopy();
+    int err = clSetKernelArg(k, 0, sizeof(cl_mem), &dest);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 1, sizeof(cl_mem), &src);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 2, sizeof(int), &length);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 3, sizeof(int), &destOffset);
+    U_ASSERT(err == 0);
+    err = clSetKernelArg(k, 4, sizeof(int), &srcOffset);
+    U_ASSERT(err == 0);
+    err = clGetKernelWorkGroupInfo(k, id, CL_KERNEL_WORK_GROUP_SIZE, sizeof(local), &local, NULL);
+    U_ASSERT(err == 0);
+    err = clEnqueueNDRangeKernel(q, k, 1, NULL, &global, &local, 0, NULL, NULL);
+    U_ASSERT(err == 0);
+}
+
+void bidirectionalLSTMOpenCL(const LSTMData* fData, int32_t len, int32_t* input, int32_t* output, UErrorCode& status) {
+    umtx_initOnce(gOpenCLInitOnce, &initOpenCL, status);
+    double start = uprv_getUTCtime();
+
+    int err;
+    cl_device_id id = gOpenCL->getDeviceID();
+    cl_context cx = gOpenCL->getContext();
+    cl_command_queue q = clCreateCommandQueue(cx, id, 0, &err);
+
+    int hunits = fData->fForwardU.d1();
+
+    cl_mem E = create2DData(cx, q, fData->fEmbedding, err);
+    U_ASSERT(err == 0);
+    cl_mem W = create2DData(cx, q, fData->fBackwardW, err);
+    U_ASSERT(err == 0);
+    cl_mem U = create2DData(cx, q, fData->fBackwardU, err);
+    U_ASSERT(err == 0);
+    cl_mem B = create1DData(cx, q, fData->fBackwardB, err);
+    U_ASSERT(err == 0);
+
+    // we creaet both with 2 * hunits but we always use only the first hunits
+    // in LSTM and only use the 2nd hunits when calculate the logp
+    // in the forward step.
+    cl_mem both = createBuffer(cx, 2 * hunits);
+    cl_mem h = createBuffer(cx, len * hunits);
+    cl_mem c = createBuffer(cx, hunits);
+    cl_mem ifco = createBuffer(cx, 4 * hunits);
+
+
+    const int embeddings = fData->fEmbedding.d2();
+    for (int32_t index = len - 1; index >= 0; index--) {
+        const int row = input[index];
+        LSTMIter(id, cx, q, W, U, B, E, both, ifco, c,
+                 hunits, embeddings, row);
+        copy(id, q, h, both, hunits, index*hunits, 0);
+    }
+
+    clReleaseMemObject(W);
+    clReleaseMemObject(U);
+    clReleaseMemObject(B);
+
+    W = create2DData(cx, q, fData->fForwardW, err);
+    U_ASSERT(err == 0);
+    U = create2DData(cx, q, fData->fForwardU, err);
+    U_ASSERT(err == 0);
+    B = create1DData(cx, q, fData->fForwardB, err);
+    U_ASSERT(err == 0);
+    cl_mem oW = create2DData(cx, q, fData->fOutputW, err);
+    U_ASSERT(err == 0);
+    cl_mem oB = create1DData(cx, q, fData->fOutputB, err);
+    U_ASSERT(err == 0);
+
+    cl_mem logp = createBuffer(cx, 4*len);
+
+#if 0
+    printf("After Backward Scan: GPU h\n");
+    print(id, q, h, len*hunits, 0);
+#endif
+
+    clear(id, q, c, hunits, 0);
+    clear(id, q, both, hunits, 0); // clear the first half
+    for (int32_t index = 0; index < len; index++) {
+        const int row = input[index];
+        LSTMIter(id, cx, q,
+                 W, U, B, E, both, ifco, c,
+                 hunits, embeddings, row);
+        // copy from h[index] to the second half of b.
+        copy(id, q, both, h, hunits, hunits, index*hunits);
+        Output(id, cx, q, logp, both, oW, oB, hunits, index * 4);
+    }
+    clReleaseMemObject(h);
+    clReleaseMemObject(c);
+    clReleaseMemObject(both);
+    clReleaseMemObject(ifco);
+    clReleaseMemObject(E);
+    clReleaseMemObject(W);
+    clReleaseMemObject(U);
+    clReleaseMemObject(B);
+    clReleaseMemObject(oW);
+    clReleaseMemObject(oB);
+
+    cl_mem index = createIntBuffer(cx, len);
+    maxIndex(id, q, index, logp, len, 4);
+
+    // To Debug
+    err = clFinish(q);
+    U_ASSERT(err == 0);
+
+    err = clEnqueueReadBuffer(q, index, CL_TRUE, 0, len * sizeof(int), output, 0, NULL, NULL);
+
+    U_ASSERT(err == 0);
+
+    clReleaseMemObject(logp);
+    clReleaseMemObject(index);
+
+    clReleaseCommandQueue(q);
+    double end = uprv_getUTCtime();
+    printf("OpenCL %f\n", end-start);
 }
 
 // Minimum word size
@@ -656,84 +1357,40 @@ LSTMBreakEngine::divideUpDictionaryRange( UText *text,
     fVectorizer->vectorize(text, startPos, endPos, offsets, indices, status);
     if (U_FAILURE(status)) return 0;
     int32_t* offsetsBuf = offsets.getBuffer();
-    int32_t* indicesBuf = indices.getBuffer();
 
-    int32_t input_seq_len = indices.size();
-    int32_t hunits = fData->fForwardU.d1();
-
+    int32_t len = indices.size();
     // ----- Begin of all the Array memory allocation needed for this function
     // Allocate temp array used inside compute()
-    Array1D ifco(4 * hunits, status);
 
-    Array1D c(hunits, status);
-    Array1D logp(4, status);
-
-    // TODO: limit size of hBackward. If input_seq_len is too big, we could
+    // TODO: limit size of hBackward. If len is too big, we could
     // run out of memory.
     // Backward LSTM
-    Array2D hBackward(input_seq_len, hunits, status);
-
-    // Allocate fbRow and slice the internal array in two.
-    Array1D fbRow(2 * hunits, status);
 
     // ----- End of all the Array memory allocation needed for this function
     if (U_FAILURE(status)) return 0;
 
-    // To save the needed memory usage, the following is different from the
-    // Python or ICU4X implementation. We first perform the Backward LSTM
-    // and then merge the iteration of the forward LSTM and the output layer
-    // together because we only neetdto remember the h[t-1] for Forward LSTM.
-    for (int32_t i = input_seq_len - 1; i >= 0; i--) {
-        Array1D hRow = hBackward.row(i);
-        if (i != input_seq_len - 1) {
-            hRow.assign(hBackward.row(i+1));
-        }
-#ifdef LSTM_DEBUG
-        printf("hRow %d\n", i);
-        hRow.print();
-        printf("indicesBuf[%d] = %d\n", i, indicesBuf[i]);
-        printf("fData->fEmbedding.row(indicesBuf[%d]):\n", i);
-        fData->fEmbedding.row(indicesBuf[i]).print();
-#endif  // LSTM_DEBUG
-        compute(hunits,
-                fData->fBackwardW, fData->fBackwardU, fData->fBackwardB,
-                fData->fEmbedding.row(indicesBuf[i]),
-                hRow, c, ifco);
+    UVector32 m1(len, status);
+    m1.setSize(len);
+    bidirectionalLSTMCPU(fData, indices.size(), indices.getBuffer(), m1.getBuffer(), status);
+    if (U_FAILURE(status)) return 0;
+
+    UVector32 m2(len, status);
+    m2.setSize(len);
+    bidirectionalLSTMOpenCL(fData, indices.size(), indices.getBuffer(), m2.getBuffer(), status);
+
+    printf("maxIndex and maxIndex2 is %s\n", m1 == m2 ? "SAME" : "Different");
+    if (U_FAILURE(status)) return 0;
+
+#if 0
+    for (int32_t i = 0; i < len; i++) {
+      if (maxIndex.elementAti(i) != maxIndex2.elementAti(i)) {
+        printf("Diff %d = %d vs %d\n", i, maxIndex.elementAti(i), maxIndex2.elementAti(i));
+      }
     }
+#endif
 
-
-    Array1D forwardRow = fbRow.slice(0, hunits);  // point to first half of data in fbRow.
-    Array1D backwardRow = fbRow.slice(hunits, hunits);  // point to second half of data n fbRow.
-
-    // The following iteration merge the forward LSTM and the output layer
-    // together.
-    c.clear();  // reuse c since it is the same size.
-    for (int32_t i = 0; i < input_seq_len; i++) {
-#ifdef LSTM_DEBUG
-        printf("forwardRow %d\n", i);
-        forwardRow.print();
-#endif  // LSTM_DEBUG
-        // Forward LSTM
-        // Calculate the result into forwardRow, which point to the data in the first half
-        // of fbRow.
-        compute(hunits,
-                fData->fForwardW, fData->fForwardU, fData->fForwardB,
-                fData->fEmbedding.row(indicesBuf[i]),
-                forwardRow, c, ifco);
-
-        // assign the data from hBackward.row(i) to second half of fbRowa.
-        backwardRow.assign(hBackward.row(i));
-
-        logp.assign(fData->fOutputB).addDotProduct(fbRow, fData->fOutputW);
-#ifdef LSTM_DEBUG
-        printf("backwardRow %d\n", i);
-        backwardRow.print();
-        printf("logp %d\n", i);
-        logp.print();
-#endif  // LSTM_DEBUG
-
-        // current = argmax(logp)
-        LSTMClass current = (LSTMClass)logp.maxIndex();
+    for (int32_t i = 0; i < len; i++) {
+        LSTMClass current = (LSTMClass)m1.elementAti(i);
         // BIES logic.
         if (current == BEGIN || current == SINGLE) {
             if (i != 0) {
@@ -742,7 +1399,9 @@ LSTMBreakEngine::divideUpDictionaryRange( UText *text,
             }
         }
     }
-    return foundBreaks.size() - beginFoundBreakSize;
+
+    int32_t ret = foundBreaks.size() - beginFoundBreakSize;
+    return ret;
 }
 
 Vectorizer* createVectorizer(const LSTMData* data, UErrorCode &status) {

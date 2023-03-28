@@ -57,6 +57,7 @@ typedef enum ECleanupCommonType {
     UCLN_COMMON_UDATA,
     UCLN_COMMON_PUTIL,
     UCLN_COMMON_UINIT,
+    UCLN_COMMON_LSTM,
 
     /*
        Unified caches caches collation stuff. Collation data structures
