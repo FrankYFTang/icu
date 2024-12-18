@@ -279,9 +279,8 @@ UnicodeString&
 DateFormat::format(UDate date, UnicodeString& appendTo, FieldPosition& fieldPosition) const {
     if (fCalendar != nullptr) {
         UErrorCode ec = U_ZERO_ERROR;
-        const auto* calType = fCalendar->getType();
         // Avoid a heap allocation and corresponding free for the common case
-        if (uprv_strcmp(calType, "gregorian") == 0) {
+        if (GregorianCalendar::getStaticClassID() == fCalendar->getDynamicClassID()) {
             GregorianCalendar cal(*static_cast<GregorianCalendar*>(fCalendar));
             cal.setTime(date, ec);
             if (U_SUCCESS(ec)) {
@@ -309,9 +308,8 @@ DateFormat::format(UDate date, UnicodeString& appendTo, FieldPositionIterator* p
                    UErrorCode& status) const {
     if (fCalendar != nullptr) {
         UErrorCode ec = U_ZERO_ERROR;
-        const auto* calType = fCalendar->getType();
         // Avoid a heap allocation and corresponding free for the common case
-        if (uprv_strcmp(calType, "gregorian") == 0) {
+        if (GregorianCalendar::getStaticClassID() == fCalendar->getDynamicClassID()) {
             GregorianCalendar cal(*static_cast<GregorianCalendar*>(fCalendar));
             cal.setTime(date, ec);
             if (U_SUCCESS(ec)) {

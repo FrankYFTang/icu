@@ -77,6 +77,9 @@
 #include "dayperiodrules.h"
 #include "tznames_impl.h"   // ZONE_NAME_U16_MAX
 #include "number_utypes.h"
+#include "chnsecal.h"
+#include "dangical.h"
+#include "japancal.h"
 
 #if defined( U_DEBUG_CALSVC ) || defined (U_DEBUG_CAL)
 #include <stdio.h>
@@ -945,7 +948,7 @@ SimpleDateFormat::initialize(const Locale& locale,
     // if format is non-numeric (includes 年) and fDateOverride is not already specified.
     // Now this does get updated if applyPattern subsequently changes the pattern type.
     if (fDateOverride.isBogus() && fHasHanYearChar &&
-            fCalendar != nullptr && uprv_strcmp(fCalendar->getType(),"japanese") == 0 &&
+            fCalendar != nullptr && fCalendar->getDynamicClassID() == JapaneseCalendar::getStaticClassID() &&
             uprv_strcmp(fLocale.getLanguage(),"ja") == 0) {
         fDateOverride.setTo(u"y=jpanyear", -1);
     }
@@ -1050,7 +1053,7 @@ SimpleDateFormat::_format(Calendar& cal, UnicodeString& appendTo,
     }
     Calendar* workCal = &cal;
     Calendar* calClone = nullptr;
-    if (&cal != fCalendar && uprv_strcmp(cal.getType(), fCalendar->getType()) != 0) {
+    if (&cal != fCalendar && cal.getDynamicClassID() != fCalendar->getDynamicClassID()) {
         // Different calendar type
         // We use the time and time zone from the input calendar, but
         // do not use the input calendar for field calculation.
@@ -1523,8 +1526,8 @@ SimpleDateFormat::subFormat(UnicodeString &appendTo,
     // "GGGG" is wide era name, "GGGGG" is narrow era name, anything else is abbreviated name
     case UDAT_ERA_FIELD:
         {
-            const auto* calType = cal.getType();
-            if (uprv_strcmp(calType,"chinese") == 0 || uprv_strcmp(calType,"dangi") == 0) {
+            if (cal.getDynamicClassID() == ChineseCalendar::getStaticClassID() ||
+                cal.getDynamicClassID() == DangiCalendar::getStaticClassID()) {
                 zeroPaddingNumber(currentNumberFormat,appendTo, value, 1, 9); // as in ICU4J
             } else {
                 if (count == 5) {
@@ -1575,10 +1578,11 @@ SimpleDateFormat::subFormat(UnicodeString &appendTo,
     // for "MMMMM"/"LLLLL", use the narrow form
     case UDAT_MONTH_FIELD:
     case UDAT_STANDALONE_MONTH_FIELD:
-        if (uprv_strcmp(cal.getType(),"hebrew") == 0) {
-           if (HebrewCalendar::isLeapYear(cal.get(UCAL_YEAR,status)) && value == 6 && count >= 3 )
+        if (cal.getDynamicClassID() == HebrewCalendar::getStaticClassID()) {
+           bool inLeapYear = cal.inTemporalLeapYear(status);
+           if (inLeapYear && value == 6 && count >= 3 )
                value = 13; // Show alternate form for Adar II in leap years in Hebrew calendar.
-           if (!HebrewCalendar::isLeapYear(cal.get(UCAL_YEAR,status)) && value >= 6 && count < 3 )
+           if (!inLeapYear && value >= 6 && count < 3 )
                value--; // Adjust the month number down 1 in Hebrew non-leap years, i.e. Adar is 6, not 7.
         }
         {
@@ -2272,7 +2276,7 @@ SimpleDateFormat::parse(const UnicodeString& text, Calendar& cal, ParsePosition&
 
     Calendar* calClone = nullptr;
     Calendar *workCal = &cal;
-    if (&cal != fCalendar && uprv_strcmp(cal.getType(), fCalendar->getType()) != 0) {
+    if (&cal != fCalendar && cal.getDynamicClassID() != fCalendar->getDynamicClassID()) {
         // Different calendar type
         // We use the time/zone from the input calendar, but
         // do not use the input calendar for field calculation.
@@ -2903,7 +2907,7 @@ int32_t SimpleDateFormat::matchAlphaMonthStrings(const UnicodeString& text,
 
     if (bestMatch >= 0) { 
         // Adjustment for Hebrew Calendar month Adar II
-        if (!strcmp(cal.getType(),"hebrew") && bestMatch==13) {
+        if (cal.getDynamicClassID() == HebrewCalendar::getStaticClassID() && bestMatch==13) {
             cal.set(UCAL_MONTH,6);
         } else {
             cal.set(UCAL_MONTH, bestMatch);
@@ -2963,7 +2967,7 @@ int32_t SimpleDateFormat::matchString(const UnicodeString& text,
     if (bestMatch >= 0) {
         if (field < UCAL_FIELD_COUNT) {
             // Adjustment for Hebrew Calendar month Adar II
-            if (!strcmp(cal.getType(),"hebrew") && field==UCAL_MONTH && bestMatch==13) {
+            if (cal.getDynamicClassID() == HebrewCalendar::getStaticClassID() && field==UCAL_MONTH && bestMatch==13) {
                 cal.set(field,6);
             } else {
                 if (field == UCAL_YEAR) {
@@ -3052,7 +3056,6 @@ int32_t SimpleDateFormat::subParse(const UnicodeString& text, int32_t& start, ch
     if (numericLeapMonthFormatter != nullptr) {
         numericLeapMonthFormatter->setFormats(reinterpret_cast<const Format**>(&currentNumberFormat), 1);
     }
-    UBool isChineseCalendar = (uprv_strcmp(cal.getType(),"chinese") == 0 || uprv_strcmp(cal.getType(),"dangi") == 0);
 
     // If there are any spaces here, skip over them.  If we hit the end
     // of the string, then fail.
@@ -3068,6 +3071,8 @@ int32_t SimpleDateFormat::subParse(const UnicodeString& text, int32_t& start, ch
     }
     pos.setIndex(start);
 
+    UBool isChineseCalendar = cal.getDynamicClassID() == ChineseCalendar::getStaticClassID() ||
+        cal.getDynamicClassID() == DangiCalendar::getStaticClassID();
     // We handle a few special cases here where we need to parse
     // a number value.  We handle further, more generic cases below.  We need
     // to handle some of them here because some fields require extra processing on
@@ -3242,12 +3247,7 @@ int32_t SimpleDateFormat::subParse(const UnicodeString& text, int32_t& start, ch
 
         // Delayed checking for adjustment of Hebrew month numbers in non-leap years.
         if (saveHebrewMonth >= 0) {
-            HebrewCalendar *hc = (HebrewCalendar*)&cal;
-            if (!hc->isLeapYear(value) && saveHebrewMonth >= 6) {
-               cal.set(UCAL_MONTH,saveHebrewMonth);
-            } else {
-               cal.set(UCAL_MONTH,saveHebrewMonth-1);
-            }
+            cal.set(UCAL_ORDINAL_MONTH, saveHebrewMonth);
             saveHebrewMonth = -1;
         }
         return pos.getIndex();
@@ -3289,7 +3289,7 @@ int32_t SimpleDateFormat::subParse(const UnicodeString& text, int32_t& start, ch
             // When parsing month numbers from the Hebrew Calendar, we might need to adjust the month depending on whether
             // or not it was a leap year.  We may or may not yet know what year it is, so might have to delay checking until
             // the year is parsed.
-            if (!strcmp(cal.getType(),"hebrew")) {
+            if (cal.getDynamicClassID() == HebrewCalendar::getStaticClassID()) {
                 HebrewCalendar *hc = (HebrewCalendar*)&cal;
                 if (cal.isSet(UCAL_YEAR)) {
                    UErrorCode monthStatus = U_ZERO_ERROR;
@@ -3852,7 +3852,7 @@ int32_t SimpleDateFormat::subParse(const UnicodeString& text, int32_t& start, ch
         switch (patternCharIndex) {
         case UDAT_MONTH_FIELD:
             // See notes under UDAT_MONTH_FIELD case above
-            if (!strcmp(cal.getType(),"hebrew")) {
+            if (cal.getDynamicClassID() == HebrewCalendar::getStaticClassID()) {
                 HebrewCalendar *hc = (HebrewCalendar*)&cal;
                 if (cal.isSet(UCAL_YEAR)) {
                    UErrorCode monthStatus = U_ZERO_ERROR;
@@ -4034,7 +4034,7 @@ SimpleDateFormat::applyPattern(const UnicodeString& pattern)
 
     // Hack to update use of Gannen year numbering for ja@calendar=japanese -
     // use only if format is non-numeric (includes 年) and no other fDateOverride.
-    if (fCalendar != nullptr && uprv_strcmp(fCalendar->getType(),"japanese") == 0 &&
+    if (fCalendar != nullptr && fCalendar->getDynamicClassID() == JapaneseCalendar::getStaticClassID() &&
             uprv_strcmp(fLocale.getLanguage(),"ja") == 0) {
         if (fDateOverride==UnicodeString(u"y=jpanyear") && !fHasHanYearChar) {
             // Gannen numbering is set but new pattern should not use it, unset;
