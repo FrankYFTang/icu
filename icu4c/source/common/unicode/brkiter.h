@@ -105,7 +105,7 @@ class CharString;
  * and in the sample program icu/source/samples/break/break.cpp
  *
  */
-class U_COMMON_API BreakIterator : public UObject {
+class U_COMMON_API BreakIterator : public UObject , public DataLocaleInformation  {
 public:
     /**
      *  destructor
@@ -648,8 +648,6 @@ protected:
 private:
 
     /** @internal (private) */
-    CharString* actualLocale = nullptr;
-    CharString* validLocale = nullptr;
     CharString* requestLocale = nullptr;
 };
 
