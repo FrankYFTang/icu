@@ -110,7 +110,7 @@ class ClockMath {
      * Calling with a divisor <= 0 is disallowed.
      */
     static double floorDivide(double dividend, double divisor,
-                              double* remainder);
+                              int32_t* remainder);
 };
 
 // Useful millisecond constants
