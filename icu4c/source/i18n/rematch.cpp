@@ -5651,6 +5651,7 @@ void RegexMatcher::MatchChunkAt(int32_t startIdx, UBool toEnd, UErrorCode &statu
             {
                 U_ASSERT(opValue>=0 && opValue<fFrameSize);
                 backSearchIndex = static_cast<int32_t>(fp->fExtra[opValue]);
+                printf("%d %d\n", backSearchIndex, fp->fInputIdx);
                 U_ASSERT(backSearchIndex <= fp->fInputIdx);
                 if (backSearchIndex == fp->fInputIdx) {
                     // We've backed up the input idx to the point that the loop started.

@@ -107,6 +107,7 @@ void RegexTest::runIndexedTest( int32_t index, UBool exec, const char* &name, ch
     TESTCASE_AUTO(TestBug13632);
     TESTCASE_AUTO(TestBug20359);
     TESTCASE_AUTO(TestBug20863);
+    TESTCASE_AUTO(TestBug23143);
     TESTCASE_AUTO_END;
 }
 
@@ -5814,6 +5815,27 @@ void RegexTest::TestBug20359() {
     assertSuccess(WHERE, status);
 }
 
+
+void RegexTest::TestBug23143() {
+    const char16_t regex_array[] = {
+        0x0028, 0x003F, 0x002D, 0x0069, 0x0029, 0xC1CD, 0xD805, 0x002E, 0x002A, 0xD820
+    };
+    UnicodeString regex(regex_array, sizeof(regex_array)/sizeof(char16_t));
+    const char16_t haystack_array[] = {
+        0xDF20, 0xC1CD, 0xD805, 0xDF20,
+    };
+    UnicodeString haystack(haystack_array, sizeof(haystack_array)/sizeof(char16_t));
+
+    UErrorCode status = U_ZERO_ERROR;
+    std::unique_ptr<icu::RegexPattern> re(icu::RegexPattern::compile(regex, UREGEX_CASE_INSENSITIVE, status));
+    if (U_FAILURE(status)) {
+      return;
+    }
+    std::unique_ptr<icu::RegexMatcher> regex_matcher(re->matcher(haystack, status));
+    if (U_SUCCESS(status)) {
+      regex_matcher->find(0, status);
+    }
+}
 
 void RegexTest::TestBug20863() {
     // Test that patterns with a large number of named capture groups work correctly.
