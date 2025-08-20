@@ -118,6 +118,9 @@ final class NFRuleSet {
             if (pos == -1) {
                 throw new IllegalArgumentException("Rule set name doesn't end in colon");
             }
+            if (pos < 2) {
+                throw new IllegalArgumentException("Rule set name is '%'");
+            }
             else {
                 String ruleName = description.substring(0, pos);
                 this.isParseable = !ruleName.endsWith("@noparse");
