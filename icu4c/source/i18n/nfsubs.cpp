@@ -1306,6 +1306,9 @@ NumeratorSubstitution::doParse(const UnicodeString& text,
 
         while (workText.length() > 0 && workPos.getIndex() != 0) {
             workPos.setIndex(0);
+            if (getRuleSet() == nullptr) {
+                break;
+            }
             getRuleSet()->parse(workText, workPos, 1, nonNumericalExecutedRuleMask, recursionCount, temp); // parse zero or nothing at all
             if (workPos.getIndex() == 0) {
                 // we failed, either there were no more zeros, or the number was formatted with digits
