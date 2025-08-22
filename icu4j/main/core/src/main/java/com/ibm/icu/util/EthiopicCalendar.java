@@ -306,7 +306,7 @@ public final class EthiopicCalendar extends CECalendar
         if (newerField(EXTENDED_YEAR, YEAR) == EXTENDED_YEAR) {
             eyear = internalGet(EXTENDED_YEAR, 1); // Default to year 1
         } else if (isAmeteAlemEra()){
-            eyear = internalGet(YEAR, 1); // Default to year 1 of Amelete Mihret
+            eyear = internalGet(YEAR, 1); // Default to year 1
         } else {
             // The year defaults to the epoch start, the era to AMETE_MIHRET
             int era = internalGet(ERA, AMETE_MIHRET);

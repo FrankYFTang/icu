@@ -141,9 +141,8 @@ EthiopicAmeteAlemCalendar::handleGetExtendedYear(UErrorCode& status)
     if (newerField(UCAL_EXTENDED_YEAR, UCAL_YEAR) == UCAL_EXTENDED_YEAR) {
         return internalGet(UCAL_EXTENDED_YEAR, 1); // Default to year 1
     }
-    // Default to year 1 of Amelete Mihret
-    int32_t year = internalGet(UCAL_YEAR, 1);
-    return year;
+    // Default to year 1
+    return internalGet(UCAL_YEAR, 1);
 }
 
 int32_t
