@@ -60,13 +60,18 @@ static icu::CalendarCache *gNewYearCache = nullptr;
 static icu::TimeZone *gAstronomerTimeZone = nullptr;
 static icu::UInitOnce gAstronomerTimeZoneInitOnce {};
 
-/**
- * The start year of the Chinese calendar, the 61st year of the reign
- * of Huang Di.  Some sources use the first year of his reign,
- * resulting in EXTENDED_YEAR values 60 years greater and ERA (cycle)
- * values one greater.
+/*
+ * The start year of the Chinese calendar, 1CE.
  */
-static const int32_t CHINESE_EPOCH_YEAR = -2636; // Gregorian year
+static const int32_t CHINESE_EPOCH_YEAR = 1; // Gregorian year
+                                             //
+/**
+ * The start year of the Chinese calendar for cycle calculation,
+ * the 61st year of the reign of Huang Di.
+ * Some sources use the first year of his reign,
+ * resulting in ERA (cycle) values one greater.
+ */
+static const int32_t CYCLE_EPOCH = -2636; // Gregorian year
 
 /**
  * The offset from GMT in milliseconds at which we perform astronomical
@@ -226,16 +231,12 @@ int32_t ChineseCalendar::handleGetExtendedYear(UErrorCode& status) {
         // adjust to the instance specific epoch
         int32_t cycle = internalGet(UCAL_ERA, 1);
         year = internalGet(UCAL_YEAR, 1);
-        const Setting setting = getSetting(status);
-        if (U_FAILURE(status)) {
-            return 0;
-        }
         // Handle int32 overflow calculation for
-        // year = year + (cycle-1) * 60 -(fEpochYear - CHINESE_EPOCH_YEAR)
+        // year = year + (cycle-1) * 60 + CYCLE_EPOCH - CHINESE_EPOCH_YEAR
         if (uprv_add32_overflow(cycle, -1, &cycle) || // 0-based cycle
             uprv_mul32_overflow(cycle, 60, &cycle) ||
             uprv_add32_overflow(year, cycle, &year) ||
-            uprv_add32_overflow(year, -(setting.epochYear-CHINESE_EPOCH_YEAR),
+            uprv_add32_overflow(year, CYCLE_EPOCH-CHINESE_EPOCH_YEAR,
                                 &year)) {
             status = U_ILLEGAL_ARGUMENT_ERROR;
             return 0;
@@ -362,12 +363,7 @@ int64_t ChineseCalendar::handleComputeMonthStartWithLeap(int32_t eyear, int32_t 
     if (U_FAILURE(status)) {
        return 0;
     }
-    int32_t gyear;
-    if (uprv_add32_overflow(eyear, setting.epochYear - 1, &gyear)) {
-        status = U_ILLEGAL_ARGUMENT_ERROR;
-        return 0;
-    }
-
+    int32_t gyear = eyear;
     int32_t theNewYear = newYear(setting, gyear, status);
     int32_t newMoon = newMoonNear(setting.zoneAstroCalc, theNewYear + month * 29, true, status);
     if (U_FAILURE(status)) {
@@ -897,12 +893,21 @@ void ChineseCalendar::handleComputeFields(int32_t julianDay, UErrorCode & status
     hasLeapMonthBetweenWinterSolstices = monthInfo.hasLeapMonthBetweenWinterSolstices;
 
     // Extended year and cycle year is based on the epoch year
-    int32_t eyear = gyear - setting.epochYear;
-    int32_t cycle_year = gyear - CHINESE_EPOCH_YEAR;
+    int32_t eyear;
+    int32_t cycle_year;
+    if (uprv_add32_overflow(gyear, -CHINESE_EPOCH_YEAR, &eyear) ||
+        uprv_add32_overflow(gyear, -CYCLE_EPOCH, &cycle_year)) {
+        status = U_ILLEGAL_ARGUMENT_ERROR;
+        return;
+    }
     if (monthInfo.month < 11 ||
         gmonth >= UCAL_JULY) {
-        eyear++;
-        cycle_year++;
+        // forward to next year
+        if (uprv_add32_overflow(eyear, 1, &eyear) ||
+            uprv_add32_overflow(cycle_year, 1, &cycle_year)) {
+            status = U_ILLEGAL_ARGUMENT_ERROR;
+            return;
+        }
     }
     int32_t dayOfMonth = days - monthInfo.thisMoon + 1;
 
@@ -1074,10 +1079,6 @@ void ChineseCalendar::offsetMonth(int32_t newMoon, int32_t dayOfMonth, int32_t d
     }
 }
 
-int32_t ChineseCalendar::getRelatedYearDifference() const {
-    return CHINESE_EPOCH_YEAR - 1;
-}
-
 IMPL_SYSTEM_DEFAULT_CENTURY(ChineseCalendar, "@calendar=chinese")
 
 bool
@@ -1172,7 +1173,6 @@ int32_t ChineseCalendar::internalGetMonth(int32_t defaultValue, UErrorCode& stat
 
 ChineseCalendar::Setting ChineseCalendar::getSetting(UErrorCode&) const {
   return {
-        CHINESE_EPOCH_YEAR,
         getAstronomerTimeZone(),
         &gWinterSolsticeCache,
         &gNewYearCache
