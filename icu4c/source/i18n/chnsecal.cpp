@@ -787,10 +787,20 @@ struct MonthInfo computeMonthInfo(
         return output;
     }
     if (days < solsticeAfter) {
-        solsticeBefore = winterSolstice(setting, gyear - 1, status);
+        int32_t gprevious_year;
+        if (uprv_add32_overflow(gyear, -1, &gprevious_year)) {
+            status = U_ILLEGAL_ARGUMENT_ERROR;
+            return output;
+        }
+        solsticeBefore = winterSolstice(setting, gprevious_year, status);
     } else {
         solsticeBefore = solsticeAfter;
-        solsticeAfter = winterSolstice(setting, gyear + 1, status);
+        int32_t gnext_year;
+        if (uprv_add32_overflow(gyear, 1, &gnext_year)) {
+            status = U_ILLEGAL_ARGUMENT_ERROR;
+            return output;
+        }
+        solsticeAfter = winterSolstice(setting, gnext_year, status);
     }
     if (!(solsticeBefore <= days && days < solsticeAfter)) {
         status = U_ILLEGAL_ARGUMENT_ERROR;
@@ -820,7 +830,12 @@ struct MonthInfo computeMonthInfo(
         return output;
     }
     if (days < theNewYear) {
-        theNewYear = newYear(setting, gyear-1, status);
+        int32_t gprevious_year;
+        if (uprv_add32_overflow(gyear, -1, &gprevious_year)) {
+            status = U_ILLEGAL_ARGUMENT_ERROR;
+            return output;
+        }
+        theNewYear = newYear(setting, gprevious_year, status);
         if (U_FAILURE(status)) {
             return output;
         }
@@ -924,7 +939,12 @@ void ChineseCalendar::handleComputeFields(int32_t julianDay, UErrorCode & status
        return;
     }
     if (days < theNewYear) {
-        theNewYear = newYear(setting, gyear-1, status);
+        int32_t gprevious_year;
+        if (uprv_add32_overflow(gyear, -1, &gprevious_year)) {
+            status = U_ILLEGAL_ARGUMENT_ERROR;
+            return;
+        }
+        theNewYear = newYear(setting, gprevious_year, status);
     }
     if (U_FAILURE(status)) {
        return;
@@ -987,7 +1007,12 @@ int32_t newYear(const icu::ChineseCalendar::Setting& setting,
 
     if (cacheValue == 0) {
 
-        int32_t solsticeBefore= winterSolstice(setting, gyear - 1, status);
+        int32_t gprevious_year;
+        if (uprv_add32_overflow(gyear, -1, &gprevious_year)) {
+            status = U_ILLEGAL_ARGUMENT_ERROR;
+            return 0;
+        }
+        int32_t solsticeBefore= winterSolstice(setting, gprevious_year, status);
         int32_t solsticeAfter = winterSolstice(setting, gyear, status);
         int32_t newMoon1 = newMoonNear(timeZone, solsticeBefore + 1, true, status);
         int32_t newMoon2 = newMoonNear(timeZone, newMoon1 + SYNODIC_GAP, true, status);
