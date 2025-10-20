@@ -209,4 +209,12 @@ public class RBNFParseTest extends CoreTestFmwk {
             // success!
         }
     }
+    @Test
+    public void TestNullRuleSet() {
+        try {
+            RuleBasedNumberFormat rbnf = new RuleBasedNumberFormat("x00:a>>>b>#>", Locale.US);
+        } catch (IllegalArgumentException e) {
+            // success!
+        }
+    }
 }

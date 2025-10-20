@@ -1225,7 +1225,11 @@ class FractionalPartSubstitution extends NFSubstitution {
         } else {
             byDigits = false;
             useSpaces = true;
-            this.ruleSet.makeIntoFractionRuleSet();
+            if (this.ruleSet != null) {
+                this.ruleSet.makeIntoFractionRuleSet();
+            } else {
+                throw new IllegalArgumentException("rule set is missing");
+            }
         }
     }
 
