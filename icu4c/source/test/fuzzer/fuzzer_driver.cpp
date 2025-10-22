@@ -12,6 +12,8 @@
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size);
 
+constexpr size_t kFuzzerTestDataSizeLimit = 32 * 1024; // Limit to 32K bytes
+
 int main(int argc, char* argv[])
 {
     bool show_warning = true;
@@ -52,7 +54,11 @@ int main(int argc, char* argv[])
     }
     std::ostringstream ostrm;
     ostrm << file.rdbuf();
-    LLVMFuzzerTestOneInput(reinterpret_cast<const uint8_t*>(ostrm.str().c_str()), ostrm.str().size());
+    size_t data_size = ostrm.str().size();
+    if (data_size > kFuzzerTestDataSizeLimit) {
+      data_size = kFuzzerTestDataSizeLimit;
+    }
+    LLVMFuzzerTestOneInput(reinterpret_cast<const uint8_t*>(ostrm.str().c_str()), data_size);
 
     return 0;
 }
